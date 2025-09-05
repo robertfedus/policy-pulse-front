@@ -1,0 +1,28 @@
+# Use a recent Node LTS
+FROM node:20-alpine
+
+# Avoid global permissions issues
+ENV PNPM_HOME="/pnpm" \
+    PATH="$PNPM_HOME:$PATH"
+
+# Workdir inside the container
+WORKDIR /app
+
+# Install deps first for better layer caching
+COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
+
+# Pick your package manager automatically (defaults to npm)
+# If you use npm:
+RUN if [ -f package-lock.json ]; then npm ci; \
+    elif [ -f pnpm-lock.yaml ]; then npm i -g pnpm && pnpm i --frozen-lockfile; \
+    elif [ -f yarn.lock ]; then yarn install --frozen-lockfile; \
+    else npm i; fi
+
+# Copy the rest of the app
+COPY . .
+
+# Vite dev server default port
+EXPOSE 5173
+
+# Let Vite listen on all interfaces for Docker
+CMD [ "npm", "run", "dev", "--", "--host", "0.0.0.0" ]
