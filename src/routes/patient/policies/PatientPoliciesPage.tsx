@@ -1,5 +1,3 @@
-"use client"
-
 import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -7,6 +5,7 @@ import { Progress } from "@/components/ui/progress"
 import { Shield, DollarSign, Calendar, CheckCircle, Info } from "lucide-react"
 import { mockPatientPolicy } from "@/lib/mock-patient-data"
 import type { PatientPolicy } from "@/types/patient"
+import { RoleBasedLayout } from "@/components/layout/role-based-layout"
 
 export default function PatientPoliciesPage() {
   const [policy] = useState<PatientPolicy>(mockPatientPolicy)
@@ -20,6 +19,7 @@ export default function PatientPoliciesPage() {
   const outOfPocketProgress = (outOfPocketUsed / policy.outOfPocketMax) * 100
 
   return (
+    <RoleBasedLayout>
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-foreground">My Insurance Policy</h1>
@@ -185,5 +185,6 @@ export default function PatientPoliciesPage() {
         </CardContent>
       </Card>
     </div>
+    </RoleBasedLayout>
   )
 }

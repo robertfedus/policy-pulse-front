@@ -1,17 +1,13 @@
-export type UserRole = "hospital" | "patient"
+export type User = {
+  id: string;
+  email: string;
+  name: string;
+  role: "hospital" | "patient";
+};
 
-export interface User {
-  id: string
-  email: string
-  name: string
-  role: UserRole
-  hospitalId?: string // For hospital users
-  patientId?: string // For patient users
-}
-
-export interface AuthContextType {
-  user: User | null
-  login: (email: string, password: string) => Promise<boolean>
-  logout: () => void
-  isLoading: boolean
-}
+export type AuthContextType = {
+  user: User | null;
+  isLoading: boolean;
+  login: (email: string, password: string) => Promise<User | null>;
+  logout: () => void;
+};

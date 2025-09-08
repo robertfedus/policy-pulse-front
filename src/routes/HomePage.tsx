@@ -1,5 +1,4 @@
 import React from 'react'
-"use client"
 
 import { RoleBasedLayout } from "@/components/layout/role-based-layout"
 import { useAuth } from "@/contexts/auth-context"

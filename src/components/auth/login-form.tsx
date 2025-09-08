@@ -1,6 +1,7 @@
+// src/components/.../LoginForm.tsx
 import type React from "react"
-
 import { useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -13,15 +14,22 @@ export function LoginForm() {
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const { login, isLoading } = useAuth()
+  const navigate = useNavigate()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
 
-    const success = await login(email, password)
-    if (!success) {
+    const authedUser = await login(email, password)
+    if (!authedUser) {
       setError("Invalid email or password")
+      return
     }
+
+    // ✅ redirect by role
+    if (authedUser.role === "hospital") navigate("/hospital")
+    else if (authedUser.role === "patient") navigate("/patient")
+    else navigate("/") // fallback
   }
 
   return (

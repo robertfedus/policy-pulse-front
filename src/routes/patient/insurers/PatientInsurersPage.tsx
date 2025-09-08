@@ -1,5 +1,3 @@
-"use client"
-
 import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -7,11 +5,13 @@ import { Badge } from "@/components/ui/badge"
 import { Building2, Phone, Mail, Globe, Clock, Shield } from "lucide-react"
 import { mockInsuranceCompanies } from "@/lib/mock-patient-data"
 import type { InsuranceCompany } from "@/types/patient"
+import { RoleBasedLayout } from "@/components/layout/role-based-layout"
 
 export default function PatientInsurersPage() {
   const [insurers] = useState<InsuranceCompany[]>(mockInsuranceCompanies)
 
   return (
+    <RoleBasedLayout>
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-foreground">Insurance Companies</h1>
@@ -188,5 +188,6 @@ export default function PatientInsurersPage() {
         </CardContent>
       </Card>
     </div>
+    </RoleBasedLayout>
   )
 }

@@ -29,7 +29,7 @@ export default function App() {
         <Route path="/hospital/notifications" element={<HospitalNotificationsPage />} />
         <Route path="/patient" element={<PatientPage />} />
         <Route path="/patient/treatments" element={<PatientTreatmentsPage />} />
-        <Route path="/patient/billing" element={<PatientBillingPage />} />
+        <Route path="/patient/coverage" element={<PatientBillingPage />} />
         <Route path="/patient/policies" element={<PatientPoliciesPage />} />
         <Route path="/patient/insurers" element={<PatientInsurersPage />} />
         <Route path="/patient/visits" element={<PatientVisitsPage />} />
