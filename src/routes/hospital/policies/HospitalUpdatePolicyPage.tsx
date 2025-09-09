@@ -5,11 +5,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { FileText, Info } from "lucide-react"
 
 const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ?? ""
 
+// Coverage type aligned to your schema (no copay here)
 type CoverageEntry =
   | { type: "covered" }
   | { type: "percent"; percent: number }
@@ -31,14 +31,13 @@ type InsuranceCompany = { id: string; name: string }
 export default function PolicyNewVersionPage() {
   const { policyId } = useParams()
   const navigate = useNavigate()
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [policy, setPolicy] = useState<Policy | null>(null)
 
   // New version inputs
   const [effectiveDate, setEffectiveDate] = useState<string>("")
-  const [summary, setSummary] = useState<string>("")
-  const [changeNote, setChangeNote] = useState<string>("") // optional for /upload (schema doesn't require it)
   const [file, setFile] = useState<File | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -48,7 +47,7 @@ export default function PolicyNewVersionPage() {
   const [companiesError, setCompaniesError] = useState<string | null>(null)
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>("")
 
-  // load policy
+  // Load current policy
   useEffect(() => {
     if (!policyId) return
     let cancelled = false
@@ -64,7 +63,6 @@ export default function PolicyNewVersionPage() {
         const p: Policy | null = payload?.data ?? null
         if (!cancelled) {
           setPolicy(p)
-          setSummary(p?.summary ?? "")
           setEffectiveDate(p?.effectiveDate ?? "")
           // pre-select company from policy.insuranceCompanyRef
           const ref = p?.insuranceCompanyRef ?? ""
@@ -80,12 +78,13 @@ export default function PolicyNewVersionPage() {
     return () => { cancelled = true }
   }, [policyId])
 
-  // load companies for dropdown
+  // Load companies for dropdown
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       setCompaniesLoading(true); setCompaniesError(null)
       try {
+        // Uses underscore variant, per your backend sample
         const res = await fetch(`${API_BASE}/api/v1/insurance_companies`, {
           headers: { Accept: "application/json" },
           credentials: "include",
@@ -95,7 +94,6 @@ export default function PolicyNewVersionPage() {
         const list: InsuranceCompany[] = Array.isArray(payload?.data) ? payload.data : []
         if (!cancelled) {
           setCompanies(list)
-          // if no preselect from the policy, choose first
           if (!selectedCompanyId && list[0]) setSelectedCompanyId(list[0].id)
         }
       } catch (e: any) {
@@ -105,10 +103,10 @@ export default function PolicyNewVersionPage() {
       }
     })()
     return () => { cancelled = true }
-  }, []) // only once
+  }, []) // once
 
   function stripCoverageMap(m: Record<string, CoverageEntry>) {
-    // ensure entries match zod schema (no copay)
+    // ensure entries match zod schema shape (no copay)
     const out: Record<string, CoverageEntry> = {}
     for (const [k, v] of Object.entries(m ?? {})) {
       if (v.type === "percent") out[k] = { type: "percent", percent: Number((v as any).percent ?? 0) }
@@ -123,23 +121,19 @@ export default function PolicyNewVersionPage() {
     try {
       if (!policy) throw new Error("Missing policy")
       if (!file) throw new Error("Please upload the new PDF file")
-      if (!selectedCompanyId) throw new Error("Please select an insurance company")
 
       setSubmitting(true)
 
       // Build form to match PoliciesCreateSchema (+ file)
+      // Summary is NOT included; backend will auto-generate it from the PDF.
       const form = new FormData()
-      form.append("name", policy.name) // keep same name
-      if (summary?.trim()) form.append("summary", summary.trim())
+      form.append("name", policy.name)
       form.append("insuranceCompanyRef", `insurance_companies/${selectedCompanyId}`)
       form.append("beFileName", file.name)
       if (effectiveDate) form.append("effectiveDate", effectiveDate) // ISO (yyyy-mm-dd)
-      form.append("version", String(policy.version + 1))
+      form.append("version", String(policy.version + 1)) // increment
       form.append("coverage_map", JSON.stringify(stripCoverageMap(policy.coverage_map ?? {})))
       form.append("file", file)
-
-      // (Optional) include changeNote if backend accepts extras; remove if strict
-      if (changeNote?.trim()) form.append("changeNote", changeNote.trim())
 
       const res = await fetch(`${API_BASE}/api/v1/policies/upload`, {
         method: "POST",
@@ -150,6 +144,9 @@ export default function PolicyNewVersionPage() {
         const body = await res.text().catch(() => "")
         throw new Error(`Failed to create new version (HTTP ${res.status}) ${body}`)
       }
+
+      // Optional: you mentioned /api/v1/policies/summary/:id for manual summary.
+      // Assuming backend auto-summarizes on upload, we don’t call it here.
 
       navigate("/hospital/policies")
     } catch (err: any) {
@@ -214,53 +211,27 @@ export default function PolicyNewVersionPage() {
                   </div>
                 )}
 
-                {/* New: Company dropdown */}
-                <div className="space-y-2">
-                  <Label>Insurance Company</Label>
-                  <select
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    value={selectedCompanyId}
-                    onChange={(e) => setSelectedCompanyId(e.target.value)}
-                    disabled={companiesLoading || !!companiesError}
-                  >
-                    {companies.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                  {companiesError && <p className="text-sm text-destructive">{companiesError}</p>}
-                </div>
 
+                {/* Info */}
                 <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/40 rounded-md p-3">
                   <Info className="h-4 w-4 mt-0.5" />
                   <div>
                     <div className="font-medium">What’s required?</div>
-                    Upload a new PDF. Summary/Effective date are optional. Version will be incremented automatically.
+                    Upload a new PDF (required). Effective date is optional.
+                    The backend will auto-generate the summary and the version will be saved as <span className="font-semibold">v{(policy.version ?? 0) + 1}</span>.
                   </div>
                 </div>
 
+                {/* Editable inputs for the new version */}
                 <div className="grid md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>New Effective Date (optional)</Label>
-                    <Input type="date" value={effectiveDate ?? ""} onChange={(e) => setEffectiveDate(e.target.value)} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Short Summary (optional)</Label>
                     <Input
-                      value={summary ?? ""}
-                      onChange={(e) => setSummary(e.target.value)}
-                      placeholder="Shown on cards/lists (e.g., 'Added GLP-1 coverage')"
+                      type="date"
+                      value={effectiveDate ?? ""}
+                      onChange={(e) => setEffectiveDate(e.target.value)}
                     />
                   </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Change Summary (optional)</Label>
-                  <Textarea
-                    value={changeNote}
-                    onChange={(e) => setChangeNote(e.target.value)}
-                    rows={3}
-                    placeholder="What changed and why? (Kept optional for /upload schema)"
-                  />
                 </div>
 
                 <div className="space-y-2">

@@ -241,10 +241,6 @@ export default function PolicyCreatePage() {
                 <Label>Name</Label>
                 <Input value={name} onChange={(e) => setName(e.target.value)} required />
               </div>
-              <div className="space-y-2">
-                <Label>Effective Date (optional)</Label>
-                <Input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} />
-              </div>
             </div>
 
             <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/40 rounded-md p-3">
@@ -264,85 +260,6 @@ export default function PolicyCreatePage() {
                 required
               />
             </div>
-          </CardContent>
-        </Card>
-
-        {/* Coverage editor */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Coverage Map</CardTitle>
-            <CardDescription>Add drugs/benefits and their coverage.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {rows.length === 0 && <p className="text-sm text-muted-foreground">No items yet.</p>}
-            <div className="space-y-2">
-              {rows.map((r, i) => (
-                <div key={i} className="grid md:grid-cols-12 gap-2 items-end border p-3 rounded-md">
-                  <div className="md:col-span-4">
-                    <Label>Key</Label>
-                    <Input
-                      value={r.key}
-                      onChange={(e) => updateRow(i, { key: e.target.value })}
-                      placeholder="e.g., paracetamol 500mg"
-                    />
-                  </div>
-                  <div className="md:col-span-3">
-                    <Label>Type</Label>
-                    <select
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                      value={r.type}
-                      onChange={(e) => updateRow(i, { type: e.target.value as Row["type"] })}
-                    >
-                      <option value="covered">covered</option>
-                      <option value="percent">percent</option>
-                      <option value="not_covered">not_covered</option>
-                    </select>
-                  </div>
-                  {r.type === "percent" && (
-                    <>
-                      <div className="md:col-span-2">
-                        <Label>Percent</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={100}
-                          value={r.percent ?? ""}
-                          onChange={(e) =>
-                            updateRow(i, { percent: e.target.value === "" ? undefined : Number(e.target.value) })
-                          }
-                        />
-                      </div>
-                      <div className="md:col-span-2">
-                        <Label>Copay (optional)</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          value={r.copay ?? ""}
-                          onChange={(e) =>
-                            updateRow(i, { copay: e.target.value === "" ? undefined : Number(e.target.value) })
-                          }
-                        />
-                      </div>
-                    </>
-                  )}
-                  <div className="md:col-span-1">
-                    <Button type="button" variant="ghost" onClick={() => removeRow(i)} title="Remove">
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <Button type="button" variant="outline" onClick={addRow}>
-              <Plus className="h-4 w-4 mr-2" /> Add coverage item
-            </Button>
-
-            {rows.length > 0 && (
-              <div className="pt-2 text-xs text-muted-foreground">
-                <Badge variant="secondary">{rows.length}</Badge> items will be saved.
-              </div>
-            )}
           </CardContent>
         </Card>
 

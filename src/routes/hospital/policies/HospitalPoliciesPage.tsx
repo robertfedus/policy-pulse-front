@@ -7,7 +7,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Shield, History, Compass as Compare, AlertCircle, FileText, ExternalLink, Plus } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
-// --- shared with login style ---
 const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ?? ""
 
 // ----------------- Types -----------------
@@ -19,10 +18,10 @@ type CoverageEntry =
 export interface BackendPolicy {
   id: string
   name: string
-  summary?: string | { ok: boolean; reason?: string } // <-- widened to handle object summaries
+  summary?: string | { ok: boolean; reason?: string } // sometimes the API returns an object
   beFileName?: string
   effectiveDate: string | null
-  version: number
+  version: number | string // backend can send string; we normalize to number at runtime
   coverage_map: Record<string, CoverageEntry>
   createdAt?: { _seconds: number; _nanoseconds: number }
   updatedAt?: { _seconds: number; _nanoseconds: number }
@@ -56,15 +55,23 @@ const humanCoverage = (k: string, v: CoverageEntry) => {
   }
 }
 
-// Convert possibly-object summary to a string
+// summary may be a string or an object; render text safely
 const toSummaryText = (summary: BackendPolicy["summary"]): string | null => {
   if (typeof summary === "string") return summary
   if (summary && typeof summary === "object") {
     if ("reason" in summary && summary.reason) return String(summary.reason)
-    // fallback textualization
     try { return JSON.stringify(summary) } catch { return null }
   }
   return null
+}
+
+// Ensure version is a number and coverage_map exists
+const normalizePolicy = <T extends BackendPolicy>(p: T): T & { version: number; coverage_map: Record<string, CoverageEntry> } => {
+  return {
+    ...p,
+    version: Number((p as any).version) || 0,
+    coverage_map: (p.coverage_map ?? {}) as Record<string, CoverageEntry>,
+  }
 }
 
 // Diff helpers
@@ -106,7 +113,7 @@ async function resolvePdfUrl(policyId: string): Promise<string> {
 }
 
 // Fallback-aware fetch: try company endpoint first, then fall back to global list
-async function fetchCompanyPoliciesWithFallback(companyId: string): Promise<BackendPolicy[]> {
+async function fetchCompanyPoliciesWithFallback(companyId: string): Promise<(ReturnType<typeof normalizePolicy>)[]> {
   // 1) try /policies/insurance-company/:companyId
   try {
     const res = await fetch(`${API_BASE}/api/v1/policies/insurance-company/${companyId}`, {
@@ -115,12 +122,11 @@ async function fetchCompanyPoliciesWithFallback(companyId: string): Promise<Back
     })
     if (res.ok) {
       const payload: CompanyPoliciesResponse = await res.json()
-      if (Array.isArray(payload?.data)) return payload.data
-      return []
+      const arr = Array.isArray(payload?.data) ? payload.data : []
+      return arr.map(normalizePolicy)
     }
-    // Non-OK -> fall through to fallback
   } catch {
-    // Network or server error -> fallback below
+    // ignore and fall back
   }
 
   // 2) fallback: fetch all and filter locally
@@ -133,20 +139,20 @@ async function fetchCompanyPoliciesWithFallback(companyId: string): Promise<Back
     throw new Error(`Failed fallback fetch (/policies) HTTP ${allRes.status}${body ? ` – ${body}` : ""}`)
   }
   const allPayload: PoliciesResponse = await allRes.json()
-  const all: BackendPolicy[] = Array.isArray(allPayload?.data) ? allPayload.data : []
+  const all = (Array.isArray(allPayload?.data) ? allPayload.data : []).map(normalizePolicy)
   return all.filter((p) => (p.insuranceCompanyRef?.split("/")[1] ?? "") === companyId)
 }
 
 // ----------------- Page -----------------
 export default function PoliciesPage() {
   const navigate = useNavigate()
-  const [policies, setPolicies] = useState<BackendPolicy[]>([])
+  const [policies, setPolicies] = useState<(ReturnType<typeof normalizePolicy>)[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   // UI state
   const [activeTab, setActiveTab] = useState<"history" | "compare">("history")
-  const [comparePair, setComparePair] = useState<{ current: BackendPolicy; previous: BackendPolicy } | null>(null)
+  const [comparePair, setComparePair] = useState<{ current: ReturnType<typeof normalizePolicy>; previous: ReturnType<typeof normalizePolicy> } | null>(null)
   const [compareError, setCompareError] = useState<string | null>(null)
 
   // Load all policies then keep only latest version per (company + name)
@@ -169,14 +175,15 @@ export default function PoliciesPage() {
           throw new Error(`HTTP ${res.status}${body ? ` – ${body}` : ""}`)
         }
         const payload: PoliciesResponse = await res.json()
-        const all: BackendPolicy[] = Array.isArray(payload?.data) ? payload.data : []
+        const allRaw: BackendPolicy[] = Array.isArray(payload?.data) ? payload.data : []
+        const all = allRaw.map(normalizePolicy)
 
         // Keep only latest version for each (companyRef + name)
-        const latestMap = new Map<string, BackendPolicy>()
+        const latestMap = new Map<string, ReturnType<typeof normalizePolicy>>()
         for (const p of all) {
           const key = `${p.insuranceCompanyRef ?? ""}::${p.name ?? p.id}`
           const prev = latestMap.get(key)
-          if (!prev || (p.version ?? 0) > (prev.version ?? 0)) {
+          if (!prev || (Number(p.version) || 0) > (Number(prev.version) || 0)) {
             latestMap.set(key, p)
           }
         }
@@ -200,7 +207,7 @@ export default function PoliciesPage() {
   }
 
   // Compare with previous: tries company endpoint, falls back to global list
-  const handleCompareWithPrevious = async (current: BackendPolicy) => {
+  const handleCompareWithPrevious = async (current: ReturnType<typeof normalizePolicy>) => {
     setCompareError(null)
     setComparePair(null)
     setActiveTab("compare")
@@ -212,14 +219,15 @@ export default function PoliciesPage() {
       const allForCompany = await fetchCompanyPoliciesWithFallback(companyId)
 
       // Previous version of the SAME policy name (strict match), lower version, highest among them
+      const currentVersion = Number(current.version) || 0
       const candidates = allForCompany.filter(
-        (p) => p.name === current.name && p.version < current.version
+        (p) => p.name === current.name && (Number(p.version) || 0) < currentVersion
       )
       if (candidates.length === 0) {
         setCompareError("No previous version found for this policy.")
         return
       }
-      const previous = candidates.reduce((a, b) => (a.version > b.version ? a : b))
+      const previous = candidates.reduce((a, b) => ((Number(a.version) || 0) > (Number(b.version) || 0) ? a : b))
 
       setComparePair({ current, previous })
     } catch (e: any) {
@@ -236,7 +244,6 @@ export default function PoliciesPage() {
             <p className="text-muted-foreground mt-2">View and compare the latest policy versions.</p>
           </div>
 
-          {/* New Policy (v1) CTA */}
           <div className="flex items-center gap-2">
             <Button onClick={() => navigate("/hospital/policies/new")}>
               <Plus className="h-4 w-4 mr-2" />
@@ -303,7 +310,7 @@ export default function PoliciesPage() {
                           >
                             {policy.name}
                           </button>
-                          <span className="ml-2 text-sm text-muted-foreground">v{policy.version}</span>
+                          <span className="ml-2 text-sm text-muted-foreground">v{Number(policy.version) || 0}</span>
                         </CardTitle>
                         <CardDescription className="space-x-2">
                           <span>{insurer}</span>
@@ -328,7 +335,6 @@ export default function PoliciesPage() {
                           Open PDF
                         </Button>
 
-                        {/* Update Policy = create a new version prefilled from this one */}
                         <Button
                           variant="outline"
                           size="sm"
@@ -406,7 +412,7 @@ export default function PoliciesPage() {
 }
 
 // ---------- Coverage diff (previous vs current) ----------
-function CoverageDiff({ base, target }: { base: BackendPolicy; target: BackendPolicy }) {
+function CoverageDiff({ base, target }: { base: ReturnType<typeof normalizePolicy>; target: ReturnType<typeof normalizePolicy> }) {
   const rows = useMemo(() => diffCoverageMaps(base.coverage_map || {}, target.coverage_map || {}), [base, target])
 
   if (rows.length === 0) {
@@ -425,7 +431,7 @@ function CoverageDiff({ base, target }: { base: BackendPolicy; target: BackendPo
       <CardHeader>
         <CardTitle className="text-base">Coverage Differences</CardTitle>
         <CardDescription>
-          Comparing <span className="font-medium">v{base.version}</span> → <span className="font-medium">v{target.version}</span> of <span className="font-medium">{target.name}</span>
+          Comparing <span className="font-medium">v{Number(base.version) || 0}</span> → <span className="font-medium">v{Number(target.version) || 0}</span> of <span className="font-medium">{target.name}</span>
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -464,7 +470,7 @@ function CoverageDiff({ base, target }: { base: BackendPolicy; target: BackendPo
 }
 
 // ---------- Side-by-side PDFs (no scroll sync) ----------
-function PdfSideBySide({ current, previous }: { current: BackendPolicy; previous: BackendPolicy }) {
+function PdfSideBySide({ current, previous }: { current: ReturnType<typeof normalizePolicy>; previous: ReturnType<typeof normalizePolicy> }) {
   const [leftUrl, setLeftUrl] = useState<string | null>(null)   // previous
   const [rightUrl, setRightUrl] = useState<string | null>(null) // current
   const [err, setErr] = useState<string | null>(null)
@@ -513,14 +519,14 @@ function PdfSideBySide({ current, previous }: { current: BackendPolicy; previous
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="border rounded-md overflow-hidden bg-muted/30">
           <div className="px-3 py-2 border-b text-sm">
-            <span className="font-medium">{previous.name}</span> &nbsp;•&nbsp; v{previous.version} (Previous)
+            <span className="font-medium">{previous.name}</span> &nbsp;•&nbsp; v{Number(previous.version) || 0} (Previous)
           </div>
           <iframe ref={leftRef} title="Previous PDF" src={leftUrl ?? ""} className="w-full h-[75vh] bg-white" />
         </div>
 
         <div className="border rounded-md overflow-hidden bg-muted/30">
           <div className="px-3 py-2 border-b text-sm">
-            <span className="font-medium">{current.name}</span> &nbsp;•&nbsp; v{current.version} (Current)
+            <span className="font-medium">{current.name}</span> &nbsp;•&nbsp; v{Number(current.version) || 0} (Current)
           </div>
           <iframe ref={rightRef} title="Current PDF" src={rightUrl ?? ""} className="w-full h-[75vh] bg-white" />
         </div>

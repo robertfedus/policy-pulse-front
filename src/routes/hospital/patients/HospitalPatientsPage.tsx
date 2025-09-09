@@ -36,7 +36,7 @@ export type PatientDto = {
   role: "patient"
   password?: string // demo-only from your API (we do NOT render this)
   insuredAt?: string[] // ['policies/xyz', ...]
-  ilnesses?: Illness[]  // note: backend key is "ilnesses" (spelling)
+  illnesses?: Illness[]
   createdAt?: FirestoreTimestamp
 }
 
@@ -166,7 +166,7 @@ export default function HospitalPatientsPage() {
       const fields: string[] = [
         normalize(p.name).toLowerCase(),
         normalize(p.email).toLowerCase(),
-        ...(p.ilnesses ?? []).flatMap((ill) => [
+        ...(p.illnesses ?? []).flatMap((ill) => [
           normalize(ill.name).toLowerCase(),
           ...(ill.medications ?? []).map((m) => normalize(m).toLowerCase()),
         ]),
@@ -261,7 +261,7 @@ export default function HospitalPatientsPage() {
         {/* list */}
         <div className="grid gap-4">
           {filtered.map((p) => {
-            const illnesses = p.ilnesses ?? []
+            const illnesses = p.illnesses ?? []
             const policyRefs = p.insuredAt ?? []
             const isOpen = open.has(p.id)
 
@@ -276,7 +276,7 @@ export default function HospitalPatientsPage() {
                       <div className="flex items-center gap-2">
                         <h3 className="text-lg font-semibold text-foreground truncate">{p.name}</h3>
                         <Badge variant="secondary" className="shrink-0">
-                          {policyRefs.length} policy{policyRefs.length === 1 ? "" : "ies"}
+                          {policyRefs.length} polic{policyRefs.length === 1 ? "y" : "ies"}
                         </Badge>
                         <Badge variant="outline" className="shrink-0">
                           {illnesses.length} illness{illnesses.length === 1 ? "" : "es"}

@@ -72,14 +72,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (!rawUser?.id || !rawUser?.email) return null
 
-      // ✅ Preserve insuredAt + ilnesses from backend
+      // ✅ Preserve insuredAt + illnesses from backend
       const authed: User = {
         id: rawUser.id,
         email: rawUser.email,
         name: rawUser.name ?? "",
         role: rawUser.role ?? "patient",
         insuredAt: Array.isArray(rawUser.insuredAt) ? rawUser.insuredAt : [],
-        ilnesses: Array.isArray(rawUser.ilnesses) ? rawUser.ilnesses : [],
+        illnesses: Array.isArray(rawUser.illnesses) ? rawUser.illnesses : [],
       }
 
       setUser(authed)

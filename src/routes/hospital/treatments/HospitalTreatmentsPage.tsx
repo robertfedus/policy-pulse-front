@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { RoleBasedLayout } from "@/components/layout/role-based-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -36,7 +36,8 @@ type Patient = {
   role: "patient" | "hospital"
   insuredAt?: string[]         // ["policies/<id>", ...]
   illnesses?: Illness[]        // correct spelling from API
-  ilnesses?: Illness[]         // fallback for older/typo payloads
+  // some backends you showed earlier used "ilnesses" (one L); handle both safely
+  ilnesses?: Illness[]
   createdAt?: FirestoreTimestamp
 }
 
@@ -59,6 +60,7 @@ type PolicyResponse = { data: Policy } | { data: Policy[] }
 // ---------- Helpers ----------
 const extractPolicyId = (ref: string) => ref.split("/")[1] ?? ref
 
+// be resilient to both "illnesses" and older "ilnesses"
 const getIllnesses = (p: Patient): Illness[] => p.illnesses ?? p.ilnesses ?? []
 
 const rankCoverage = (entry?: CoverageEntry): number => {
@@ -143,6 +145,9 @@ export default function TreatmentsPage() {
   const [error, setError] = useState<string | null>(null)
   const [q, setQ] = useState("")
 
+  // Track which policy IDs we've already attempted to fetch to prevent loops
+  const fetchedPolicyIdsRef = useRef<Set<string>>(new Set())
+
   // Fetch patients for this hospital
   useEffect(() => {
     if (!hospitalId) {
@@ -163,6 +168,7 @@ export default function TreatmentsPage() {
           signal: ctrl.signal,
           headers: { Accept: "application/json" },
           credentials: "include",
+          cache: "no-store",
         })
         if (!res.ok) {
           const body = await res.text().catch(() => "")
@@ -185,12 +191,19 @@ export default function TreatmentsPage() {
     }
   }, [hospitalId])
 
-  // Collect unique policy ids from all patients, fetch each once
+  // Collect unique policy ids from all patients, fetch each once (deduped)
   useEffect(() => {
+    // Build the set of policy IDs we need for the current patients
     const ids = new Set<string>()
     for (const p of patients) (p.insuredAt ?? []).forEach((ref) => ids.add(extractPolicyId(ref)))
-    const need = Array.from(ids).filter((id) => !policyById[id])
-    if (need.length === 0) return
+
+    const toFetch = Array.from(ids).filter(
+      (id) => !policyById[id] && !fetchedPolicyIdsRef.current.has(id)
+    )
+    if (toFetch.length === 0) return
+
+    // mark as in-flight to avoid loops even if the request fails/304s
+    toFetch.forEach((id) => fetchedPolicyIdsRef.current.add(id))
 
     let cancelled = false
     const ctrl = new AbortController()
@@ -198,31 +211,42 @@ export default function TreatmentsPage() {
     ;(async () => {
       try {
         const results = await Promise.allSettled(
-          need.map(async (id) => {
+          toFetch.map(async (id) => {
             const res = await fetch(`${API_BASE}/api/v1/policies/${id}`, {
               signal: ctrl.signal,
               headers: { Accept: "application/json" },
               credentials: "include",
+              cache: "no-store", // avoid conditional 304 loops
             })
-            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            // Treat 304 as a soft miss (no change) — just don't update state
+            if (res.status === 304) return null
+            if (!res.ok) {
+              // keep it marked as fetched to prevent hammering the server
+              throw new Error(`HTTP ${res.status}`)
+            }
             const payload: PolicyResponse = await res.json()
-            // Supports either {data: Policy} or {data: Policy[]}
-            const pol = Array.isArray((payload as any).data) ? (payload as any).data[0] : (payload as any).data
+            const pol = Array.isArray((payload as any).data)
+              ? (payload as any).data[0]
+              : (payload as any).data
+            // basic shape guard
+            if (!pol || !pol.id) return null
             return pol as Policy
           })
         )
-        if (cancelled) return
 
-        // Merge using functional setState to avoid stale closure
+        if (cancelled) return
+        // Merge successfully fetched policies
         setPolicyById((prev) => {
           const next = { ...prev }
           for (const r of results) {
-            if (r.status === "fulfilled" && r.value?.id) next[r.value.id] = r.value
+            if (r.status === "fulfilled" && r.value && r.value.id) {
+              next[r.value.id] = r.value
+            }
           }
           return next
         })
       } catch {
-        // ignore; we’ll simply miss coverage where policy couldn’t load
+        // swallow — fetchedPolicyIdsRef prevents tight retry loops
       }
     })()
 
@@ -230,6 +254,7 @@ export default function TreatmentsPage() {
       cancelled = true
       ctrl.abort()
     }
+    // Important: depend only on patients (not policyById) to avoid self-trigger loops.
   }, [patients, policyById])
 
   // Build Illness -> { medications, patients[], hospitalCoverageSummary }
@@ -274,7 +299,9 @@ export default function TreatmentsPage() {
     for (const p of filteredPatients) {
       const polIds = new Set((p.insuredAt ?? []).map(extractPolicyId))
       for (const ill of getIllnesses(p)) {
-        const entry = map.get(ill.name) ?? { meds: new Set<string>(), members: [], allPolicyIds: new Set<string>() }
+        const entry =
+          map.get(ill.name) ??
+          { meds: new Set<string>(), members: [], allPolicyIds: new Set<string>() }
         ill.medications.forEach((m) => entry.meds.add(m))
         entry.members.push(p)
         polIds.forEach((id) => entry.allPolicyIds.add(id))
@@ -479,7 +506,7 @@ export default function TreatmentsPage() {
                   </div>
                 </div>
 
-                {/* Quick actions (optional placeholders) */}
+                {/* Quick actions */}
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
