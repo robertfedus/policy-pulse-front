@@ -2,7 +2,7 @@ import React, { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/contexts/auth-context"
-import { Users, FileText, Shield, Bell, LogOut, Menu, Home, Mail, Activity } from "lucide-react"
+import { Users, FileText, Shield, Bell, LogOut, Menu, Home, Mail, Clock } from "lucide-react"
 import { NavLink, useLocation } from "react-router-dom"
 import { NotificationCenter } from "@/components/notifications/notification-center"
 import { PolicyChangeWizard } from "@/components/notifications/policy-change-wizard"
@@ -12,7 +12,7 @@ const navigationItems = [
   { icon: Users, label: "Patients", href: "/hospital/patients" },
   { icon: FileText, label: "Treatment Plans", href: "/hospital/treatments" },
   { icon: Shield, label: "Policies", href: "/hospital/policies" },
-  { icon: Bell, label: "Notifications", href: "/hospital/notifications" },
+  { icon: Clock, label: "Recent Changes", href: "/hospital/changes" },
 ]
 
 // Helper: title that matches the current path (incl. nested)

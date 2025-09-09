@@ -15,24 +15,28 @@ import PatientBillingPage from './routes/patient/billing/PatientBillingPage'
 import PatientPoliciesPage from './routes/patient/policies/PatientPoliciesPage'
 import PatientInsurersPage from './routes/patient/insurers/PatientInsurersPage'
 import PatientVisitsPage from './routes/patient/visits/PatientVisitsPage'
+import PolicyCreatePage from './routes/hospital/policies/HospitalCreatePolicyPage'
+import PolicyNewVersionPage from './routes/hospital/policies/HospitalUpdatePolicyPage'
 
 export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/hospital" element={<HospitalPage />} />
-        <Route path="/hospital/patients" element={<HospitalPatientsPage />} />
-        <Route path="/hospital/treatments" element={<HospitalTreatmentsPage />} />
-        <Route path="/hospital/policies" element={<HospitalPoliciesPage />} />
-        <Route path="/hospital/notifications" element={<HospitalNotificationsPage />} />
-        <Route path="/patient" element={<PatientPage />} />
-        <Route path="/patient/treatments" element={<PatientTreatmentsPage />} />
-        <Route path="/patient/coverage" element={<PatientBillingPage />} />
-        <Route path="/patient/policies" element={<PatientPoliciesPage />} />
-        <Route path="/patient/insurers" element={<PatientInsurersPage />} />
-        <Route path="/patient/visits" element={<PatientVisitsPage />} />
+          <Route path="/" element={<HomePage />} />
+          <Route path="/hospital" element={<HospitalPage />} />
+          <Route path="/hospital/patients" element={<HospitalPatientsPage />} />
+          <Route path="/hospital/treatments" element={<HospitalTreatmentsPage />} />
+          <Route path="/hospital/policies" element={<HospitalPoliciesPage />} />
+          <Route path="/hospital/policies/new" element={<PolicyCreatePage />} />
+          <Route path="/hospital/policies/:policyId/new-version" element={<PolicyNewVersionPage />} />
+          <Route path="/hospital/changes" element={<HospitalNotificationsPage />} />
+          <Route path="/patient" element={<PatientPage />} />
+          <Route path="/patient/treatments" element={<PatientTreatmentsPage />} />
+          <Route path="/patient/coverage" element={<PatientBillingPage />} />
+          <Route path="/patient/policies" element={<PatientPoliciesPage />} />
+          <Route path="/patient/insurers" element={<PatientInsurersPage />} />
+          <Route path="/patient/visits" element={<PatientVisitsPage />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
