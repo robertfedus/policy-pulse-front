@@ -7,7 +7,6 @@ import { RoleBasedLayout } from "@/components/layout/role-based-layout"
 
 export default function PatientTreatmentsPage() {
   const { user } = useAuth()
-
   const illnesses = user?.illnesses ?? []
 
   // If you still want to keep mock treatments for now:
