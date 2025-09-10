@@ -72,11 +72,6 @@ export function LoginForm() {
               {isLoading ? "Signing in..." : "Sign In"}
             </Button>
           </form>
-          <div className="mt-4 text-sm text-muted-foreground text-center">
-            <p>Demo credentials:</p>
-            <p>Hospital: hospital@example.com / password</p>
-            <p>Patient: patient@example.com / password</p>
-          </div>
         </CardContent>
       </Card>
     </div>
