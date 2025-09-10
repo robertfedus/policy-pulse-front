@@ -144,7 +144,7 @@ export default function PatientChatbotPage() {
             {/* Info footer */}
             <div className="text-xs text-muted-foreground flex items-center gap-2">
               <Info className="h-3.5 w-3.5" />
-              Demo assistant — not yet reading your actual policies.
+              Demo assistant. Not a real medical advisor. For questions about your health or insurance, please contact a professional.
             </div>
           </CardContent>
         </Card>
