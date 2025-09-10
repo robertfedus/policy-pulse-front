@@ -1,10 +1,8 @@
 import React, { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/contexts/auth-context"
-import { FileText, CreditCard, Shield, LogOut, Menu, Home, Building2, Bell } from "lucide-react"
+import { FileText, CreditCard, Shield, LogOut, Menu, Home, Building2 } from "lucide-react"
 import { NavLink, useLocation } from "react-router-dom"
-import { NotificationCenter } from "@/components/notifications/notification-center"
 
 const navigationItems = [
   { icon: Home, label: "Dashboard", href: "/patient", end: true },
@@ -24,11 +22,8 @@ const titleForPath = (path: string) => {
 
 export function PatientLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false)
   const { user, logout } = useAuth()
   const pathname = useLocation().pathname
-
-  const unreadNotifications = 1
 
   return (
     <div className="min-h-screen bg-background">
@@ -117,29 +112,8 @@ export function PatientLayout({ children }: { children: React.ReactNode }) {
             <h2 className="text-lg font-semibold text-card-foreground">
               {titleForPath(pathname)}
             </h2>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-muted-foreground">
-                Welcome, {user?.name}
-              </span>
-
-              <Button
-                variant="ghost"
-                size="icon"
-                className="relative"
-                onClick={() => setNotificationCenterOpen(true)}
-                aria-label="Open notifications"
-              >
-                <Bell className="h-4 w-4" aria-hidden="true" />
-                {unreadNotifications > 0 && (
-                  <Badge
-                    variant="destructive"
-                    className="absolute -top-1 -right-1 h-5 w-5 text-xs flex items-center justify-center p-0"
-                    aria-label={`${unreadNotifications} unread notifications`}
-                  >
-                    {unreadNotifications}
-                  </Badge>
-                )}
-              </Button>
+            <div className="text-sm text-muted-foreground">
+              Welcome, {user?.name}
             </div>
           </div>
         </header>
@@ -155,11 +129,6 @@ export function PatientLayout({ children }: { children: React.ReactNode }) {
           aria-hidden="true"
         />
       )}
-
-      <NotificationCenter
-        isOpen={notificationCenterOpen}
-        onClose={() => setNotificationCenterOpen(false)}
-      />
     </div>
   )
 }

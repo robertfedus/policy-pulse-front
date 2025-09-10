@@ -1,191 +1,296 @@
-import React from 'react'
-
+import React, { useEffect, useMemo, useState } from "react"
+import { RoleBasedLayout } from "@/components/layout/role-based-layout"
+import { useAuth } from "@/contexts/auth-context"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Progress } from "@/components/ui/progress"
-import { FileText, Shield, Activity, Calendar, AlertTriangle, CheckCircle } from "lucide-react"
-import { mockPatientTreatmentPlan, mockPatientBills, mockPatientPolicy } from "@/lib/mock-patient-data"
-import { RoleBasedLayout } from '@/components/layout/role-based-layout'
+import { Button } from "@/components/ui/button"
+import {
+  Activity,
+  Shield,
+  FileText,
+  Pill,
+  Stethoscope,
+  Loader2,
+  AlertTriangle,
+  ExternalLink,
+  Clock,
+} from "lucide-react"
+
+const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ?? ""
+const api = (path: string) => `${API_BASE}/api/v1${path}`
+
+type FirestoreTimestamp = { _seconds: number; _nanoseconds: number }
+type Illness = { name: string; medications: string[] }
+type Patient = {
+  id: string
+  email: string
+  name: string
+  role: "patient" | "hospital"
+  insuredAt?: string[] // ["policies/<id>", ...]
+  illnesses?: Illness[]
+  ilnesses?: Illness[] // legacy spelling
+  createdAt?: FirestoreTimestamp
+  updatedAt?: FirestoreTimestamp
+}
+type PatientsResponse = { data: Patient[] }
+
+const tsToDate = (ts?: FirestoreTimestamp) =>
+  ts ? new Date(ts._seconds * 1000 + Math.floor(ts._nanoseconds / 1e6)) : undefined
+
+const extractPolicyId = (ref: string) => ref.split("/")[1] ?? ref
 
 export default function PatientDashboard() {
-  const upcomingAppointments = 2
-  const pendingBills = mockPatientBills.filter((b) => b.status === "pending").length
-  const totalOwed = mockPatientBills
-    .filter((b) => b.status !== "paid")
-    .reduce((sum, bill) => sum + bill.patientAmount, 0)
+  const { user } = useAuth()
+  const [me, setMe] = useState<Patient | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const ctrl = new AbortController()
+
+    ;(async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const res = await fetch(api("/auth/patients"), {
+          signal: ctrl.signal,
+          headers: { Accept: "application/json" },
+          credentials: "include",
+          cache: "no-store",
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const payload: PatientsResponse = await res.json()
+        const list = Array.isArray(payload?.data) ? payload.data : []
+
+        // pick current user by id, fallback by email
+        const byId = user?.id ? list.find((p) => p.id === user.id) : undefined
+        const byEmail = !byId && user?.email ? list.find((p) => p.email === user.email) : undefined
+        const mine = byId ?? byEmail ?? null
+
+        if (!cancelled) setMe(mine)
+      } catch (e: any) {
+        if (!cancelled) setError(e?.message ?? "Failed to load your data")
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      ctrl.abort()
+    }
+  }, [user?.id, user?.email])
+
+  // -------- derived data (from me only) ----------
+  const illnesses: Illness[] = useMemo(() => {
+    if (!me) return []
+    return (me.illnesses ?? me.ilnesses ?? []).map((i) => ({
+      name: i?.name ?? "—",
+      medications: Array.isArray(i?.medications) ? i.medications : [],
+    }))
+  }, [me])
+
+  const uniqueMedications = useMemo(() => {
+    const s = new Set<string>()
+    illnesses.forEach((ill) => ill.medications.forEach((m) => s.add(String(m ?? "").trim())))
+    return Array.from(s).filter(Boolean)
+  }, [illnesses])
+
+  const policies = (me?.insuredAt ?? []).map(extractPolicyId)
+  const created = tsToDate(me?.createdAt)
+  const updated = tsToDate(me?.updatedAt)
+
+  const openPolicyPdf = (policyId: string) => {
+    const url = `${API_BASE}/api/v1/policies/${policyId}/pdf`
+    window.open(url, "_blank", "noopener,noreferrer")
+  }
 
   return (
     <RoleBasedLayout>
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Patient Portal</h1>
-          <p className="text-muted-foreground mt-2">Access your treatment plans, bills, and insurance information.</p>
+          <p className="text-muted-foreground mt-2">
+            Your illnesses, medications, and linked insurance policies.
+          </p>
         </div>
 
-        {/* Quick Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Treatment Progress</CardTitle>
-              <FileText className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{mockPatientTreatmentPlan.progress}%</div>
-              <p className="text-xs text-muted-foreground">Week 3 of 8</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Upcoming Appointments</CardTitle>
-              <Calendar className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{upcomingAppointments}</div>
-              <p className="text-xs text-muted-foreground">Next: Jan 20, 2024</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Pending Bills</CardTitle>
-              <Shield className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{pendingBills}</div>
-              <p className="text-xs text-muted-foreground">${totalOwed} owed</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Insurance Status</CardTitle>
-              <Activity className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-green-600">Active</div>
-              <p className="text-xs text-muted-foreground">{mockPatientPolicy.planName}</p>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Current Treatment */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <FileText className="mr-2 h-5 w-5 text-primary" />
-              Current Treatment Plan
-            </CardTitle>
-            <CardDescription>Your active treatment progress and details</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="font-medium text-foreground">{mockPatientTreatmentPlan.title}</h4>
-                <p className="text-sm text-muted-foreground">Dr. {mockPatientTreatmentPlan.doctorName}</p>
-              </div>
-              <Badge variant="default">Active</Badge>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Progress</span>
-                <span className="font-medium">{mockPatientTreatmentPlan.progress}% Complete</span>
-              </div>
-              <Progress value={mockPatientTreatmentPlan.progress} className="h-2" />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-              <div>
-                <p className="font-medium text-foreground">Total Cost</p>
-                <p className="text-muted-foreground">${mockPatientTreatmentPlan.totalCost}</p>
-              </div>
-              <div>
-                <p className="font-medium text-foreground">Insurance Covers</p>
-                <p className="text-green-600">${mockPatientTreatmentPlan.coveredAmount}</p>
-              </div>
-              <div>
-                <p className="font-medium text-foreground">Your Cost</p>
-                <p className="text-red-600">${mockPatientTreatmentPlan.uncoveredAmount}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Recent Activity & Alerts */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {loading && (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center">
-                <Activity className="mr-2 h-5 w-5 text-primary" />
-                Recent Activity
+              <CardTitle className="flex items-center gap-2">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Loading your data…
               </CardTitle>
-              <CardDescription>Your latest medical activities and updates</CardDescription>
+              <CardDescription>Fetching from /api/v1/auth/patients</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center space-x-3">
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">Physical therapy session completed</p>
-                  <p className="text-xs text-muted-foreground">January 15, 2024</p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-3">
-                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">MRI scan results available</p>
-                  <p className="text-xs text-muted-foreground">January 10, 2024</p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-3">
-                <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">Insurance policy updated</p>
-                  <p className="text-xs text-muted-foreground">January 1, 2024</p>
-                </div>
-              </div>
-            </CardContent>
           </Card>
+        )}
 
+        {error && (
+          <Card className="border-destructive/40">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-destructive">
+                <AlertTriangle className="h-5 w-5" />
+                Couldn’t load data
+              </CardTitle>
+              <CardDescription className="break-words">{error}</CardDescription>
+            </CardHeader>
+          </Card>
+        )}
+
+        {!loading && !error && !me && (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center">
-                <AlertTriangle className="mr-2 h-5 w-5 text-yellow-600" />
-                Important Alerts
-              </CardTitle>
-              <CardDescription>Updates and notifications requiring your attention</CardDescription>
+              <CardTitle>No matching profile found</CardTitle>
+              <CardDescription>
+                We couldn’t find your record in /auth/patients using your account.
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                <div className="flex items-start space-x-2">
-                  <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-medium text-red-800">Policy Change</p>
-                    <p className="text-xs text-red-600">X-Ray coverage removed from your plan</p>
-                  </div>
-                </div>
-              </div>
-              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                <div className="flex items-start space-x-2">
-                  <CheckCircle className="h-4 w-4 text-blue-600 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-medium text-blue-800">Appointment Reminder</p>
-                    <p className="text-xs text-blue-600">Follow-up consultation on Jan 20</p>
-                  </div>
-                </div>
-              </div>
-              <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                <div className="flex items-start space-x-2">
-                  <AlertTriangle className="h-4 w-4 text-yellow-600 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-medium text-yellow-800">Bill Due Soon</p>
-                    <p className="text-xs text-yellow-600">Invoice INV-2024-001 due Feb 15</p>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
           </Card>
-        </div>
+        )}
+
+        {!loading && !error && me && (
+          <>
+            {/* KPIs (only data available from /auth/patients) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Policies Linked</CardTitle>
+                  <Shield className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{policies.length}</div>
+                  <p className="text-xs text-muted-foreground">From your account</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Illnesses</CardTitle>
+                  <Stethoscope className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{illnesses.length}</div>
+                  <p className="text-xs text-muted-foreground">Tracked in your profile</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Unique Medications</CardTitle>
+                  <Pill className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{uniqueMedications.length}</div>
+                  <p className="text-xs text-muted-foreground">Across all illnesses</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Account Status</CardTitle>
+                  <Activity className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-green-600">Active</div>
+                  <p className="text-xs text-muted-foreground">
+                    Member since {created ? created.toLocaleDateString() : "—"}
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Illnesses & Medications */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center">
+                  <FileText className="mr-2 h-5 w-5 text-primary" />
+                  Your Illnesses & Medications
+                </CardTitle>
+                <CardDescription>From /api/v1/auth/patients</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {illnesses.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No illnesses on file.</p>
+                )}
+                {illnesses.map((ill) => (
+                  <div key={ill.name} className="p-3 rounded-md border bg-card">
+                    <div className="flex items-center justify-between">
+                      <div className="font-medium">{ill.name || "Illness"}</div>
+                      <Badge variant="outline">{ill.medications.length} med(s)</Badge>
+                    </div>
+                    {ill.medications.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {ill.medications.map((m) => (
+                          <Badge key={m} variant="secondary">{m}</Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            {/* Policies Linked */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center">
+                  <Shield className="mr-2 h-5 w-5 text-primary" />
+                  Your Policies
+                </CardTitle>
+                <CardDescription>Open PDFs if available (hospital may restrict access)</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {policies.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No policies linked to your account.</p>
+                )}
+                {policies.map((pid) => (
+                  <div key={pid} className="flex items-center justify-between rounded-md border px-3 py-2">
+                    <div className="text-sm">
+                      <span className="font-medium">Policy ID:</span> {pid}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openPolicyPdf(pid)}
+                      title="Open policy PDF"
+                    >
+                      Open PDF
+                      <ExternalLink className="h-4 w-4 ml-2" />
+                    </Button>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            {/* Profile Activity (dates from your record) */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center">
+                  <Clock className="mr-2 h-5 w-5 text-primary" />
+                  Profile Activity
+                </CardTitle>
+                <CardDescription>Timestamps from your account</CardDescription>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                <div className="p-3 rounded-md border bg-muted/40">
+                  <div className="font-medium">Created</div>
+                  <div className="text-muted-foreground">
+                    {created ? created.toLocaleString() : "—"}
+                  </div>
+                </div>
+                <div className="p-3 rounded-md border bg-muted/40">
+                  <div className="font-medium">Last Updated</div>
+                  <div className="text-muted-foreground">
+                    {updated ? updated.toLocaleString() : "—"}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </>
+        )}
       </div>
     </RoleBasedLayout>
   )
