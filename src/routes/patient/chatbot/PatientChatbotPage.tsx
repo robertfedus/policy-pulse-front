@@ -4,11 +4,7 @@ import { useAuth } from "@/contexts/auth-context"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import {
-  MessageSquare,
-  Send,
-  Info,
-} from "lucide-react"
+import { MessageSquare, Send, Info, Loader2 } from "lucide-react"
 
 type ChatMsg = {
   id: string
@@ -19,6 +15,80 @@ type ChatMsg = {
 
 const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ?? ""
 const api = (path: string) => `${API_BASE}/api/v1${path}`
+
+/** Basic HTML escaper so we can safely inject formatted Markdown-ish text */
+function escapeHtml(s: string) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
+/**
+ * Very small “Markdown-lite” formatter:
+ * - supports ### Headings
+ * - **bold**
+ * - bullet lists (- item)
+ * - keeps paragraphs and line breaks
+ * This avoids pulling in a full markdown lib.
+ */
+function mdLiteToHtml(input: string) {
+  const text = escapeHtml(input)
+
+  // Split into lines for simple structural transforms
+  const lines = text.split(/\r?\n/)
+
+  const out: string[] = []
+  let inList = false
+
+  const flushList = () => {
+    if (inList) {
+      out.push("</ul>")
+      inList = false
+    }
+  }
+
+  for (let raw of lines) {
+    let line = raw.trim()
+
+    // Headings: ### Title
+    if (/^#{1,6}\s+/.test(line)) {
+      flushList()
+      const level = Math.min(6, (line.match(/^#+/)?.[0].length) || 3)
+      const content = line.replace(/^#{1,6}\s+/, "")
+      out.push(`<h${level} class="font-semibold mt-2 mb-1">${content}</h${level}>`)
+      continue
+    }
+
+    // Bullets: - item
+    if (/^-\s+/.test(line)) {
+      if (!inList) {
+        inList = true
+        out.push('<ul class="list-disc pl-6 space-y-1 my-1">')
+      }
+      const content = line.replace(/^-\s+/, "")
+      out.push(`<li>${content}</li>`)
+      continue
+    }
+
+    // Blank line → paragraph break
+    if (line === "") {
+      flushList()
+      out.push("<br/>")
+      continue
+    }
+
+    // Normal paragraph line
+    flushList()
+    out.push(`<p>${line}</p>`)
+  }
+  flushList()
+
+  // **bold**
+  let html = out.join("\n").replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+
+  return html
+}
 
 export default function PatientChatbotPage() {
   const { user } = useAuth()
@@ -32,48 +102,75 @@ export default function PatientChatbotPage() {
   ])
   const [input, setInput] = useState("")
   const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  // Simple, local rule-based responder (stub)
-  function generateReply(q: string): string {
-    const s = q.toLowerCase()
+  // Send conversation to backend (with user id in body or header—your server accepts body.userId)
+  const callBackend = async (allMessages: ChatMsg[]): Promise<string> => {
+    const history = allMessages.map(m => ({ role: m.role, content: m.text }))
 
-    if (/(policy|policies)/.test(s) && /(pdf|open|view)/.test(s)) {
-      return "You can view your linked policies from the Policies page. If you see a PDF button there, click it to open the policy document."
+    const res = await fetch(api("/ai/chat"), {
+      method: "POST",
+      credentials: "include", // keep if you need cookies
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: user?.id ?? null,
+        messages: history,
+      }),
+    })
+
+    // Prefer JSON; fall back to text
+    let reply: string | null = null
+    try {
+      const data = await res.json()
+      reply =
+        data?.answer ??           // <-- your backend field
+        data?.reply ??
+        data?.message ??
+        data?.content ??
+        data?.assistant ??
+        data?.choices?.[0]?.message?.content ??
+        null
+      if (!res.ok) throw new Error(reply || `HTTP ${res.status}`)
+    } catch {
+      const txt = await res.text().catch(() => "")
+      if (!res.ok) throw new Error(txt || `HTTP ${res.status}`)
+      reply = txt || null
     }
-    if (/(coverage|covered|copay|co-pay)/.test(s)) {
-      return "Coverage depends on the specific policy version. In general: “covered” means no cost beyond copays/deductibles, “percent” means cost share by percentage, and “not covered” means you pay the retail price."
-    }
-    if (/(medication|drug|rx|paracetamol|ibuprofen|metformin|insulin|glp-1)/.test(s)) {
-      return "Medication coverage varies per policy. Ask about a specific medication and policy (e.g., “Is metformin 500mg covered on my latest policy?”) for a more precise answer."
-    }
-    if (/(how|help|what can you do)/.test(s)) {
-      return "I can help summarize how policy coverage works, explain terms in plain language, and guide you to where to view your policy PDFs. In a future version I can read your actual policies to answer specifically."
-    }
-    if (/(hi|hello|hey)/.test(s)) {
-      return "Hello! How can I help with your insurance policies today?"
-    }
-    return "Thanks! I’m a simple demo assistant right now. Try asking about coverage terms, medications, or where to see your policy PDFs."
+
+    return (reply && String(reply).trim()) || "Sorry, I didn’t get a response."
   }
 
   const handleSend = async () => {
     const text = input.trim()
     if (!text || sending) return
 
+    setError(null)
     setSending(true)
+
     const userMsg: ChatMsg = { id: crypto.randomUUID(), role: "user", text, ts: Date.now() }
     setMessages((m) => [...m, userMsg])
     setInput("")
 
-    // simulate thinking + local reply
-    setTimeout(() => {
-      const reply = generateReply(text)
-      const botMsg: ChatMsg = { id: crypto.randomUUID(), role: "assistant", text: reply, ts: Date.now() }
+    try {
+      const replyText = await callBackend([...messages, userMsg])
+      const botMsg: ChatMsg = { id: crypto.randomUUID(), role: "assistant", text: replyText, ts: Date.now() }
       setMessages((m) => [...m, botMsg])
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to reach the chatbot service.")
+      const botMsg: ChatMsg = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        text: "Hmm, I couldn’t reach the chatbot service. Please try again.",
+        ts: Date.now(),
+      }
+      setMessages((m) => [...m, botMsg])
+    } finally {
       setSending(false)
-      // scroll to bottom after adding messages
-      requestAnimationFrame(() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }))
-    }, 300)
+      requestAnimationFrame(() =>
+        listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" })
+      )
+    }
   }
 
   useEffect(() => {
@@ -86,12 +183,9 @@ export default function PatientChatbotPage() {
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Policy Chatbot</h1>
-          <p className="text-muted-foreground mt-2">
-            Talk to our smart chatbot to learn more.
-          </p>
+          <p className="text-muted-foreground mt-2">Talk to our smart chatbot to learn more.</p>
         </div>
 
-        {/* Chat Window */}
         <Card className="h-[560px] flex flex-col">
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2">
@@ -102,23 +196,31 @@ export default function PatientChatbotPage() {
           </CardHeader>
 
           <CardContent className="flex-1 flex flex-col gap-3 min-h-0">
-            {/* Messages list */}
+            {error && <div className="text-xs text-destructive -mt-1">{error}</div>}
+
+            {/* Messages */}
             <div
               ref={listRef}
               className="flex-1 overflow-y-auto rounded-md border bg-card p-3 space-y-3"
             >
-              {messages.map((m) => (
-                <div
-                  key={m.id}
-                  className={`max-w-[90%] md:max-w-[70%] rounded-lg px-3 py-2 text-sm ${
-                    m.role === "user"
-                      ? "ml-auto bg-primary text-primary-foreground"
-                      : "mr-auto bg-muted text-foreground"
-                  }`}
-                >
-                  {m.text}
-                </div>
-              ))}
+              {messages.map((m) => {
+                const common = "max-w-[90%] md:max-w-[70%] rounded-lg px-3 py-2 text-sm"
+                if (m.role === "assistant") {
+                  return (
+                    <div
+                      key={m.id}
+                      className={`mr-auto bg-muted text-foreground ${common}`}
+                      // Safe: we escaped content first, then added small formatting
+                      dangerouslySetInnerHTML={{ __html: mdLiteToHtml(m.text) }}
+                    />
+                  )
+                }
+                return (
+                  <div key={m.id} className={`ml-auto bg-primary text-primary-foreground ${common}`}>
+                    {m.text}
+                  </div>
+                )
+              })}
             </div>
 
             {/* Composer */}
@@ -136,12 +238,12 @@ export default function PatientChatbotPage() {
                 disabled={sending}
               />
               <Button onClick={handleSend} disabled={sending || !input.trim()}>
-                <Send className="h-4 w-4 mr-2" />
-                Send
+                {sending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+                {sending ? "Sending…" : "Send"}
               </Button>
             </div>
 
-            {/* Info footer */}
+            {/* Footer */}
             <div className="text-xs text-muted-foreground flex items-center gap-2">
               <Info className="h-3.5 w-3.5" />
               Demo assistant. Not a real medical advisor. For questions about your health or insurance, please contact a professional.
