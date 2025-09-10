@@ -1,15 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  CreditCard, Download, Eye, DollarSign, Shield, CheckCircle, AlertCircle
-} from "lucide-react";
-import { mockPatientBills, mockPatientTreatmentPlan } from "@/lib/mock-patient-data";
+import { CreditCard, DollarSign, Shield } from "lucide-react";
+import { mockPatientBills } from "@/lib/mock-patient-data";
 import type { PatientBill } from "@/types/patient";
 import { RoleBasedLayout } from "@/components/layout/role-based-layout";
 
@@ -19,7 +17,7 @@ const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ?? "";
 type Detail =
   | { med: string; type: "percent"; percent: number; points: number }
   | { med: string; type: "not_covered"; points: number }
-  | { med: string; type: "covered"; points: number }; // just in case
+  | { med: string; type: "covered"; points: number };
 
 type PolicySummary = {
   id: string;
@@ -54,33 +52,6 @@ const extractDateFromFile = (name?: string) => {
   const m = name.match(/\b(20\d{2}-\d{2}-\d{2})\b/); // e.g., 2025-11-15
   return m?.[1] ?? null;
 };
-//const userId = user?.id ?? "unknown"
-
-// async function handleSwitchPlan(policyId: string) {
-//   if (!user?.id) {
-//     alert("You must be signed in to switch plans.")
-//     return
-//   }
-//   try {
-//     const res = await fetch(`${API_BASE}/api/v1/auth/updateUser/${userId}`, {
-//       method: "POST",
-//       headers: { "Content-Type": "application/json" },
-//       body: JSON.stringify({
-//         insuredAt: "policies/"+policyId,
-//       }),
-//     })
-
-//     if (!res.ok) {
-//       throw new Error(await res.text())
-//     }
-
-//     alert("Your insurance plan has been switched!")
-//   } catch (e: any) {
-//     alert(`Failed to switch: ${e.message}`)
-//   }
-// }
-
-
 
 function computeCoverageRatioFromDetails(opt: PolicySummary): number {
   if (Array.isArray(opt.details) && opt.details.length > 0) {
@@ -93,7 +64,6 @@ function computeCoverageRatioFromDetails(opt: PolicySummary): number {
   }
   return typeof opt.coveredRatio === "number" ? opt.coveredRatio : 0;
 }
-
 
 const medLabel = (d: Detail) =>
   d.type === "percent" ? `${d.med} • ${d.percent}%` : d.type === "covered" ? `${d.med} • 100%` : `${d.med} • Not covered`;
@@ -110,46 +80,80 @@ export default function PatientBillingPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const loadRecommendations = useCallback(async (uid: string, signal?: AbortSignal) => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/recommendations/${encodeURIComponent(uid)}`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        signal,
+      });
+      if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+      const json: RecommendationsResponse = await res.json();
+      json.betterOptions = [...(json.betterOptions ?? [])].sort(
+        (a, b) => (b.deltaScore ?? b.score) - (a.deltaScore ?? a.score)
+      );
+      setData(json);
+    } catch (e: any) {
+      if (e?.name !== "AbortError") setErr(e?.message || "Failed to load recommendations");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!userId || userId === "unknown") return;
     const ac = new AbortController();
-    (async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const res = await fetch(`${API_BASE}/api/v1/recommendations/${encodeURIComponent(userId)}`, {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-          signal: ac.signal,
-        });
-        if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
-        const json: RecommendationsResponse = await res.json();
-        // optional: sort better options by score desc (or deltaScore desc)
-        json.betterOptions = [...(json.betterOptions ?? [])].sort(
-          (a, b) => (b.deltaScore ?? b.score) - (a.deltaScore ?? a.score)
-        );
-        setData(json);
-      } catch (e: any) {
-        if (e?.name !== "AbortError") setErr(e?.message || "Failed to load recommendations");
-      } finally {
-        setLoading(false);
-      }
-    })();
+    loadRecommendations(userId, ac.signal);
     return () => ac.abort();
-  }, [userId]);
+  }, [userId, loadRecommendations]);
+
+  // ---- Switch plan (PATCH /auth/updateUser/:id) ----
+  const handleSwitchPlan = useCallback(
+    async (policyId: string) => {
+      if (!user?.id) {
+        alert("You must be signed in to switch plans.");
+        return;
+      }
+
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/v1/auth/updateUser/${encodeURIComponent(user.id)}`,
+          {
+            method: "PATCH",
+            credentials: "include", // keep if you use cookie/session auth
+            headers: {
+              "Content-Type": "application/json", // <— remove X-User-Id
+            },
+            body: JSON.stringify({
+              insuredAt: [`policies/${policyId}`], // Firestore-style ref as array
+            }),
+          }
+        );
+
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(body || `HTTP ${res.status}`);
+        }
+
+        alert("Your insurance plan has been switched!");
+        if (user?.id) await loadRecommendations(user.id);
+      } catch (e: any) {
+        alert(`Failed to switch: ${e?.message || "Unknown error"}`);
+      }
+    },
+    [user?.id, loadRecommendations]
+  );
 
   // ---------------- Totals & coverage math ----------------
-  // Raw totals from bills
   const totalBilled = useMemo(() => bills.reduce((s, b) => s + b.totalAmount, 0), [bills]);
-  const rawCovered  = useMemo(() => bills.reduce((s, b) => s + b.coveredAmount, 0), [bills]);
-  
-
+  const rawCovered = useMemo(() => bills.reduce((s, b) => s + b.coveredAmount, 0), [bills]);
 
   // Average coverage score from the current policy (0..1). Default to 1 if unknown.
   const avgCoverageScore = data?.current?.score ?? 1;
-  const totalOwed = totalBilled - totalBilled*avgCoverageScore;
+  const totalOwed = totalBilled - totalBilled * avgCoverageScore;
 
-  // Adjusted covered dollars and percent of the billed total
   const adjustedCovered = useMemo(() => rawCovered * avgCoverageScore, [rawCovered, avgCoverageScore]);
   const adjustedCoveredPct = useMemo(
     () => (totalBilled > 0 ? Math.round((adjustedCovered / totalBilled) * 100) : 0),
@@ -158,6 +162,7 @@ export default function PatientBillingPage() {
 
   // current out-of-pocket proxy (you can replace with your real value)
   const currentAnnualOOP = useMemo(() => bills.reduce((s, b) => s + b.patientAmount, 0), [bills]);
+  void currentAnnualOOP; // silence unused for now
 
   return (
     <RoleBasedLayout>
@@ -216,7 +221,6 @@ export default function PatientBillingPage() {
 
           {/* ---- Medical Bills tab (with current plan at top) ---- */}
           <TabsContent value="bills" className="space-y-4">
-            {/* Current Insurance Plan (from recommendations) */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center">
@@ -250,8 +254,11 @@ export default function PatientBillingPage() {
                       </div>
                       {data.current.beFileName && (
                         <Button variant="outline" size="sm" asChild>
-                          {/* Change href to your real file route if different */}
-                          <a href={`/files/${encodeURIComponent(data.current.beFileName)}`} target="_blank" rel="noreferrer">
+                          <a
+                            href={`/files/${encodeURIComponent(data.current.beFileName)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
                             View Policy PDF
                           </a>
                         </Button>
@@ -267,8 +274,8 @@ export default function PatientBillingPage() {
                               d.type === "percent"
                                 ? `${d.med} • ${d.percent}%`
                                 : d.type === "covered"
-                                ? `${d.med} • 100%`
-                                : `${d.med} • Not covered`;
+                                  ? `${d.med} • 100%`
+                                  : `${d.med} • Not covered`;
                             return (
                               <Badge key={i} variant={d.type === "not_covered" ? "destructive" : "default"}>
                                 {label}
@@ -282,8 +289,6 @@ export default function PatientBillingPage() {
                 )}
               </CardContent>
             </Card>
-
-            {/* Your bills list can go here if needed */}
           </TabsContent>
 
           {/* ---- Recommendations (only betterOptions) ---- */}
@@ -323,7 +328,6 @@ export default function PatientBillingPage() {
                               <Badge variant="outline">
                                 Coverage: {Math.round(computeCoverageRatioFromDetails(opt) * 100)}%
                               </Badge>
-
                             </div>
 
                             {opt.details?.length > 0 && (
@@ -348,12 +352,20 @@ export default function PatientBillingPage() {
                           <div className="flex items-center gap-2">
                             {opt.beFileName && (
                               <Button variant="outline" size="sm" asChild>
-                      <a href={`https://firebasestorage.googleapis.com/v0/b/policy-pulse-7cf5e.firebasestorage.app/o/${encodeURIComponent(opt.beFileName)}?alt=media`} target="_blank" rel="noreferrer">
-                        View PDF
-                      </a>
-                    </Button>
+                                <a
+                                  href={`https://firebasestorage.googleapis.com/v0/b/policy-pulse-7cf5e.firebasestorage.app/o/${encodeURIComponent(
+                                    opt.beFileName
+                                  )}?alt=media`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  View PDF
+                                </a>
+                              </Button>
                             )}
-                            <Button size="sm" onClick={() => handleSwitchPlan(opt.id)}>Switch Plan</Button>
+                            <Button size="sm" onClick={() => handleSwitchPlan(opt.id)}>
+                              Switch Plan
+                            </Button>
                           </div>
                         </div>
                       );
