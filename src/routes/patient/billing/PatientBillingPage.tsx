@@ -1,25 +1,128 @@
-import { useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { CreditCard, Download, Eye, DollarSign, Shield, CheckCircle, AlertCircle } from "lucide-react"
-import { mockPatientBills, mockPatientTreatmentPlan } from "@/lib/mock-patient-data"
-import type { PatientBill } from "@/types/patient"
-import { RoleBasedLayout } from "@/components/layout/role-based-layout"
+"use client";
 
+import { useEffect, useMemo, useState } from "react";
+import { useAuth } from "@/contexts/auth-context";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  CreditCard, Download, Eye, DollarSign, Shield, CheckCircle, AlertCircle
+} from "lucide-react";
+import { mockPatientBills, mockPatientTreatmentPlan } from "@/lib/mock-patient-data";
+import type { PatientBill } from "@/types/patient";
+import { RoleBasedLayout } from "@/components/layout/role-based-layout";
+
+const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ?? "";
+
+// ---------------- Types that match YOUR API exactly ----------------
+type Detail =
+  | { med: string; type: "percent"; percent: number; points: number }
+  | { med: string; type: "not_covered"; points: number }
+  | { med: string; type: "covered"; points: number }; // just in case
+
+type PolicySummary = {
+  id: string;
+  name: string;
+  insuranceCompanyRef: string;
+  version: number;
+  beFileName?: string;
+  covered: number;
+  partial: number;
+  notCovered: number;
+  score: number;
+  details: Detail[];
+  coveredRatio: number;
+  deltaScore?: number;
+  pctImprovement?: number;
+};
+
+type RecommendationsResponse = {
+  userId: string;
+  medications: string[];
+  minImprovement: number;
+  resolvedCurrentPolicyId: string;
+  current: PolicySummary;
+  count: number;
+  betterOptions: PolicySummary[];
+};
+
+// ---------------- Helper utils ----------------
+const fmtMoney = (n: number) => `$${(Math.round(n * 100) / 100).toLocaleString()}`;
+const extractDateFromFile = (name?: string) => {
+  if (!name) return null;
+  const m = name.match(/\b(20\d{2}-\d{2}-\d{2})\b/); // e.g., 2025-11-15
+  return m?.[1] ?? null;
+};
+const medLabel = (d: Detail) =>
+  d.type === "percent" ? `${d.med} • ${d.percent}%` : d.type === "covered" ? `${d.med} • 100%` : `${d.med} • Not covered`;
+
+// ---------------- Component ----------------
 export default function PatientBillingPage() {
-  const [bills] = useState<PatientBill[]>(mockPatientBills)
+  const [bills] = useState<PatientBill[]>(mockPatientBills);
 
-  const totalOwed = bills.filter((b) => b.status !== "paid").reduce((sum, bill) => sum + bill.patientAmount, 0)
-  const totalCovered = bills.reduce((sum, bill) => sum + bill.coveredAmount, 0)
-  const totalBilled = bills.reduce((sum, bill) => sum + bill.totalAmount, 0)
+  // ---- Recommendations fetch (YOUR endpoint/shape) ----
+  const { user } = useAuth();
+  const userId = user?.id ?? user?._id ?? user?.userId ?? "unknown";
+
+  const [data, setData] = useState<RecommendationsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!userId || userId === "unknown") return;
+    const ac = new AbortController();
+    (async () => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/recommendations/${encodeURIComponent(userId)}`, {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+          signal: ac.signal,
+        });
+        if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+        const json: RecommendationsResponse = await res.json();
+        // optional: sort better options by score desc (or deltaScore desc)
+        json.betterOptions = [...(json.betterOptions ?? [])].sort(
+          (a, b) => (b.deltaScore ?? b.score) - (a.deltaScore ?? a.score)
+        );
+        setData(json);
+      } catch (e: any) {
+        if (e?.name !== "AbortError") setErr(e?.message || "Failed to load recommendations");
+      } finally {
+        setLoading(false);
+      }
+    })();
+    return () => ac.abort();
+  }, [userId]);
+
+  // ---------------- Totals & coverage math ----------------
+  // Raw totals from bills
+  const totalBilled = useMemo(() => bills.reduce((s, b) => s + b.totalAmount, 0), [bills]);
+  const rawCovered  = useMemo(() => bills.reduce((s, b) => s + b.coveredAmount, 0), [bills]);
+  
+
+
+  // Average coverage score from the current policy (0..1). Default to 1 if unknown.
+  const avgCoverageScore = data?.current?.score ?? 1;
+  const totalOwed = totalBilled - totalBilled*avgCoverageScore;
+
+  // Adjusted covered dollars and percent of the billed total
+  const adjustedCovered = useMemo(() => rawCovered * avgCoverageScore, [rawCovered, avgCoverageScore]);
+  const adjustedCoveredPct = useMemo(
+    () => (totalBilled > 0 ? Math.round((adjustedCovered / totalBilled) * 100) : 0),
+    [adjustedCovered, totalBilled]
+  );
+
+  // current out-of-pocket proxy (you can replace with your real value)
+  const currentAnnualOOP = useMemo(() => bills.reduce((s, b) => s + b.patientAmount, 0), [bills]);
 
   return (
     <RoleBasedLayout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Bills & Coverage</h1>
+          <h1 className="text-3xl font-bold text-foreground">Bills &amp; Coverage</h1>
           <p className="text-muted-foreground mt-2">View your medical bills and insurance coverage details.</p>
         </div>
 
@@ -31,7 +134,7 @@ export default function PatientBillingPage() {
               <CreditCard className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">${totalBilled}</div>
+              <div className="text-2xl font-bold">{fmtMoney(totalBilled)}</div>
               <p className="text-xs text-muted-foreground">All medical services</p>
             </CardContent>
           </Card>
@@ -42,9 +145,10 @@ export default function PatientBillingPage() {
               <Shield className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-600">${totalCovered}</div>
+              <div className="text-2xl font-bold text-green-600">{fmtMoney(adjustedCovered)}</div>
               <p className="text-xs text-muted-foreground">
-                {totalBilled > 0 ? Math.round((totalCovered / totalBilled) * 100) : 0}% coverage
+                {adjustedCoveredPct}% of {fmtMoney(totalBilled)} covered
+                {avgCoverageScore !== 1 && " (plan score applied)"}
               </p>
             </CardContent>
           </Card>
@@ -55,7 +159,7 @@ export default function PatientBillingPage() {
               <DollarSign className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-red-600">${totalOwed}</div>
+              <div className="text-2xl font-bold text-red-600">{fmtMoney(totalOwed)}</div>
               <p className="text-xs text-muted-foreground">Outstanding balance</p>
             </CardContent>
           </Card>
@@ -63,175 +167,161 @@ export default function PatientBillingPage() {
 
         <Tabs defaultValue="bills" className="space-y-4">
           <TabsList>
-            <TabsTrigger value="bills">Medical Bills</TabsTrigger>
-            <TabsTrigger value="coverage">Coverage Details</TabsTrigger>
+            <TabsTrigger value="bills">Coverage Details</TabsTrigger>
+            <TabsTrigger value="recommendations" disabled={!userId || userId === "unknown"}>
+              Recommendations
+            </TabsTrigger>
           </TabsList>
 
+          {/* ---- Medical Bills tab (with current plan at top) ---- */}
           <TabsContent value="bills" className="space-y-4">
-            {bills.map((bill) => (
-              <Card key={bill.id}>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle className="flex items-center">
-                        <CreditCard className="h-5 w-5 mr-2 text-primary" />
-                        Invoice {bill.invoiceNumber}
-                      </CardTitle>
-                      <CardDescription>
-                        Date: {new Date(bill.date).toLocaleDateString()} • Due:{" "}
-                        {new Date(bill.dueDate).toLocaleDateString()}
-                      </CardDescription>
-                    </div>
-                    <Badge
-                      variant={
-                        bill.status === "paid" ? "default" : bill.status === "pending" ? "secondary" : "destructive"
-                      }
-                    >
-                      {bill.status}
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {/* Bill Summary */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-muted rounded-lg">
-                    <div className="text-center">
-                      <p className="text-sm font-medium text-foreground">Total Amount</p>
-                      <p className="text-lg font-bold">${bill.totalAmount}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-sm font-medium text-foreground">Insurance Covered</p>
-                      <p className="text-lg font-bold text-green-600">${bill.coveredAmount}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-sm font-medium text-foreground">Your Responsibility</p>
-                      <p className="text-lg font-bold text-red-600">${bill.patientAmount}</p>
-                    </div>
-                  </div>
-
-                  {/* Treatments */}
-                  <div>
-                    <h4 className="font-medium text-foreground mb-3">Services & Treatments</h4>
-                    <div className="space-y-2">
-                      {bill.treatments.map((treatment) => (
-                        <div
-                          key={treatment.id}
-                          className="flex items-center justify-between p-3 border border-border rounded-lg"
-                        >
-                          <div className="flex items-center space-x-3">
-                            {treatment.covered ? (
-                              <CheckCircle className="h-4 w-4 text-green-600" />
-                            ) : (
-                              <AlertCircle className="h-4 w-4 text-red-600" />
-                            )}
-                            <div>
-                              <p className="font-medium text-foreground">{treatment.name}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {new Date(treatment.date).toLocaleDateString()} • Code: {treatment.code}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="font-medium text-foreground">${treatment.cost}</p>
-                            <Badge variant={treatment.covered ? "default" : "secondary"}>
-                              {treatment.covered ? "Covered" : "Not Covered"}
-                            </Badge>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex space-x-2">
-                    <Button variant="outline" size="sm">
-                      <Eye className="h-4 w-4 mr-2" />
-                      View Details
-                    </Button>
-                    <Button variant="outline" size="sm">
-                      <Download className="h-4 w-4 mr-2" />
-                      Download PDF
-                    </Button>
-                    {bill.status !== "paid" && (
-                      <Button size="sm">
-                        <CreditCard className="h-4 w-4 mr-2" />
-                        Pay Now
-                      </Button>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </TabsContent>
-
-          <TabsContent value="coverage" className="space-y-4">
+            {/* Current Insurance Plan (from recommendations) */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center">
                   <Shield className="h-5 w-5 mr-2 text-primary" />
-                  Current Treatment Coverage
+                  Current Insurance Plan
                 </CardTitle>
-                <CardDescription>How your insurance covers your current treatment plan</CardDescription>
+                <CardDescription>This is the plan applied to your medical bills.</CardDescription>
               </CardHeader>
+              <CardContent className="space-y-2">
+                {!userId ? (
+                  <p className="text-sm text-muted-foreground">Sign in to view your current plan.</p>
+                ) : loading ? (
+                  <p className="text-sm text-muted-foreground">Loading current plan…</p>
+                ) : err ? (
+                  <p className="text-sm text-red-600">Failed to load: {err}</p>
+                ) : !data?.current ? (
+                  <p className="text-sm text-muted-foreground">No current policy found.</p>
+                ) : (
+                  <>
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-foreground">{data.current.name}</p>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          <Badge variant="secondary">Covered: {data.current.covered}</Badge>
+                          <Badge variant="secondary">Partial: {data.current.partial}</Badge>
+                          <Badge variant="destructive">Not covered: {data.current.notCovered}</Badge>
+                          <Badge variant="outline">
+                            Coverage: {Math.round((data.current.coveredRatio ?? 0) * 100)}%
+                          </Badge>
+                        </div>
+                      </div>
+                      {data.current.beFileName && (
+                        <Button variant="outline" size="sm" asChild>
+                          {/* Change href to your real file route if different */}
+                          <a href={`/files/${encodeURIComponent(data.current.beFileName)}`} target="_blank" rel="noreferrer">
+                            View Policy PDF
+                          </a>
+                        </Button>
+                      )}
+                    </div>
+
+                    {Array.isArray(data.current.details) && data.current.details.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-sm text-muted-foreground mb-1">Medication coverage:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {data.current.details.map((d, i) => {
+                            const label =
+                              d.type === "percent"
+                                ? `${d.med} • ${d.percent}%`
+                                : d.type === "covered"
+                                ? `${d.med} • 100%`
+                                : `${d.med} • Not covered`;
+                            return (
+                              <Badge key={i} variant={d.type === "not_covered" ? "destructive" : "default"}>
+                                {label}
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Your bills list can go here if needed */}
+          </TabsContent>
+
+          {/* ---- Recommendations (only betterOptions) ---- */}
+          <TabsContent value="recommendations" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Better Insurance Options</CardTitle>
+                <CardDescription>
+                  Plans that provide improved coverage compared to your current policy.
+                </CardDescription>
+              </CardHeader>
+
               <CardContent className="space-y-4">
-                {/* Coverage Breakdown */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-muted rounded-lg">
-                  <div className="text-center">
-                    <p className="text-sm font-medium text-foreground">Plan Total</p>
-                    <p className="text-lg font-bold">${mockPatientTreatmentPlan.totalCost}</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-sm font-medium text-foreground">Insurance Covers</p>
-                    <p className="text-lg font-bold text-green-600">${mockPatientTreatmentPlan.coveredAmount}</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-sm font-medium text-foreground">Your Cost</p>
-                    <p className="text-lg font-bold text-red-600">${mockPatientTreatmentPlan.uncoveredAmount}</p>
-                  </div>
-                </div>
+                {loading && <p className="text-sm text-muted-foreground">Loading recommendations…</p>}
+                {err && <p className="text-sm text-red-600">Failed to load: {err}</p>}
+                {!loading && !err && data && data.betterOptions.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No better options found.</p>
+                )}
 
-                {/* Coverage Details */}
-                <div>
-                  <h4 className="font-medium text-foreground mb-3">Coverage Breakdown</h4>
+                {!loading && !err && data && data.betterOptions.length > 0 && (
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg">
-                      <div className="flex items-center space-x-3">
-                        <CheckCircle className="h-4 w-4 text-green-600" />
-                        <div>
-                          <p className="font-medium text-green-800">Physical Therapy</p>
-                          <p className="text-sm text-green-600">80% coverage after deductible</p>
-                        </div>
-                      </div>
-                      <Badge variant="default">Covered</Badge>
-                    </div>
+                    {data.betterOptions.map((opt) => {
+                      const effective = extractDateFromFile(opt.beFileName);
+                      return (
+                        <div
+                          key={opt.id}
+                          className="p-4 border border-border rounded-lg bg-muted/40 flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+                        >
+                          <div>
+                            <p className="font-medium text-foreground">
+                              {opt.name} <span className="text-muted-foreground">• v{opt.version}</span>
+                            </p>
+                            <div className="flex flex-wrap gap-2 mt-1">
+                              <Badge variant="secondary">Covered: {opt.covered}</Badge>
+                              <Badge variant="secondary">Partial: {opt.partial}</Badge>
+                              <Badge variant="destructive">Not covered: {opt.notCovered}</Badge>
+                              <Badge variant="outline">Coverage: {Math.round((opt.coveredRatio ?? 0) * 100)}%</Badge>
 
-                    <div className="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg">
-                      <div className="flex items-center space-x-3">
-                        <CheckCircle className="h-4 w-4 text-green-600" />
-                        <div>
-                          <p className="font-medium text-green-800">MRI Scan</p>
-                          <p className="text-sm text-green-600">70% coverage with pre-authorization</p>
-                        </div>
-                      </div>
-                      <Badge variant="default">Covered</Badge>
-                    </div>
+                            </div>
 
-                    <div className="flex items-center justify-between p-3 bg-red-50 border border-red-200 rounded-lg">
-                      <div className="flex items-center space-x-3">
-                        <AlertCircle className="h-4 w-4 text-red-600" />
-                        <div>
-                          <p className="font-medium text-red-800">X-Ray</p>
-                          <p className="text-sm text-red-600">Coverage removed from plan effective Jan 1, 2024</p>
+                            {opt.details?.length > 0 && (
+                              <div className="mt-2">
+                                <p className="text-sm text-muted-foreground mb-1">Medication coverage:</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {opt.details.map((d, i) => (
+                                    <Badge key={i} variant={d.type === "not_covered" ? "destructive" : "default"}>
+                                      {medLabel(d)}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            <p className="text-xs text-muted-foreground mt-2">
+                              {opt.beFileName ? `Policy file: ${opt.beFileName}` : "No file attached"}
+                              {effective && ` • Effective ${effective}`}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {opt.beFileName && (
+                              <Button variant="outline" size="sm" asChild>
+                      <a href={`https://firebasestorage.googleapis.com/v0/b/policy-pulse-7cf5e.firebasestorage.app/o/${encodeURIComponent(opt.beFileName)}?alt=media`} target="_blank" rel="noreferrer">
+                        View PDF
+                      </a>
+                    </Button>
+                            )}
+                            <Button size="sm">Switch Plan</Button>
+                          </div>
                         </div>
-                      </div>
-                      <Badge variant="destructive">Not Covered</Badge>
-                    </div>
+                      );
+                    })}
                   </div>
-                </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
         </Tabs>
       </div>
     </RoleBasedLayout>
-  )
+  );
 }
