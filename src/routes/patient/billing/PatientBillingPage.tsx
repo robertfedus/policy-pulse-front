@@ -54,6 +54,47 @@ const extractDateFromFile = (name?: string) => {
   const m = name.match(/\b(20\d{2}-\d{2}-\d{2})\b/); // e.g., 2025-11-15
   return m?.[1] ?? null;
 };
+//const userId = user?.id ?? "unknown"
+
+// async function handleSwitchPlan(policyId: string) {
+//   if (!user?.id) {
+//     alert("You must be signed in to switch plans.")
+//     return
+//   }
+//   try {
+//     const res = await fetch(`${API_BASE}/api/v1/auth/updateUser/${userId}`, {
+//       method: "POST",
+//       headers: { "Content-Type": "application/json" },
+//       body: JSON.stringify({
+//         insuredAt: "policies/"+policyId,
+//       }),
+//     })
+
+//     if (!res.ok) {
+//       throw new Error(await res.text())
+//     }
+
+//     alert("Your insurance plan has been switched!")
+//   } catch (e: any) {
+//     alert(`Failed to switch: ${e.message}`)
+//   }
+// }
+
+
+
+function computeCoverageRatioFromDetails(opt: PolicySummary): number {
+  if (Array.isArray(opt.details) && opt.details.length > 0) {
+    const total = opt.details.reduce((sum, d) => {
+      if (d.type === "covered") return sum + 1;
+      if (d.type === "percent") return sum + d.percent / 100;
+      return sum; // not_covered = 0
+    }, 0);
+    return total / opt.details.length;
+  }
+  return typeof opt.coveredRatio === "number" ? opt.coveredRatio : 0;
+}
+
+
 const medLabel = (d: Detail) =>
   d.type === "percent" ? `${d.med} • ${d.percent}%` : d.type === "covered" ? `${d.med} • 100%` : `${d.med} • Not covered`;
 
@@ -63,7 +104,7 @@ export default function PatientBillingPage() {
 
   // ---- Recommendations fetch (YOUR endpoint/shape) ----
   const { user } = useAuth();
-  const userId = user?.id ?? user?._id ?? user?.userId ?? "unknown";
+  const userId = user?.id ?? "unknown";
 
   const [data, setData] = useState<RecommendationsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -279,7 +320,9 @@ export default function PatientBillingPage() {
                               <Badge variant="secondary">Covered: {opt.covered}</Badge>
                               <Badge variant="secondary">Partial: {opt.partial}</Badge>
                               <Badge variant="destructive">Not covered: {opt.notCovered}</Badge>
-                              <Badge variant="outline">Coverage: {Math.round((opt.coveredRatio ?? 0) * 100)}%</Badge>
+                              <Badge variant="outline">
+                                Coverage: {Math.round(computeCoverageRatioFromDetails(opt) * 100)}%
+                              </Badge>
 
                             </div>
 
@@ -310,7 +353,7 @@ export default function PatientBillingPage() {
                       </a>
                     </Button>
                             )}
-                            <Button size="sm">Switch Plan</Button>
+                            <Button size="sm" onClick={() => handleSwitchPlan(opt.id)}>Switch Plan</Button>
                           </div>
                         </div>
                       );
