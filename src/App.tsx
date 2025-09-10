@@ -17,6 +17,7 @@ import PatientInsurersPage from './routes/patient/insurers/PatientInsurersPage'
 import PatientVisitsPage from './routes/patient/visits/PatientVisitsPage'
 import PolicyCreatePage from './routes/hospital/policies/HospitalCreatePolicyPage'
 import PolicyNewVersionPage from './routes/hospital/policies/HospitalUpdatePolicyPage'
+import PatientChatbotPage from './routes/patient/chatbot/PatientChatbotPage'
 
 export default function App() {
   return (
@@ -37,6 +38,7 @@ export default function App() {
           <Route path="/patient/policies" element={<PatientPoliciesPage />} />
           <Route path="/patient/insurers" element={<PatientInsurersPage />} />
           <Route path="/patient/visits" element={<PatientVisitsPage />} />
+          <Route path="/patient/chatbot" element={<PatientChatbotPage/>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

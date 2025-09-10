@@ -1,7 +1,7 @@
 import React, { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/contexts/auth-context"
-import { FileText, CreditCard, Shield, LogOut, Menu, Home, Building2 } from "lucide-react"
+import { FileText, CreditCard, Shield, LogOut, Menu, Home, Building2, MessageSquare } from "lucide-react"
 import { NavLink, useLocation } from "react-router-dom"
 
 const navigationItems = [
@@ -10,6 +10,7 @@ const navigationItems = [
   { icon: CreditCard, label: "Policy Coverage", href: "/patient/coverage" },
   { icon: Shield, label: "Insurance Policies", href: "/patient/policies" },
   { icon: Building2, label: "Insurance Companies", href: "/patient/insurers" },
+  { icon: MessageSquare, label: "Policy Chatbot", href: "/patient/chatbot" }
 ]
 
 // Helper: title matching current path

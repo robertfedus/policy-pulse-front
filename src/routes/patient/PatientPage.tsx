@@ -123,7 +123,7 @@ export default function PatientDashboard() {
                 <Loader2 className="h-5 w-5 animate-spin" />
                 Loading your data…
               </CardTitle>
-              <CardDescription>Fetching from /api/v1/auth/patients</CardDescription>
+              <CardDescription>Get well soon!</CardDescription>
             </CardHeader>
           </Card>
         )}
