@@ -45,6 +45,7 @@ type RecommendationsResponse = {
   betterOptions: PolicySummary[];
 };
 
+
 // ---------------- Helper utils ----------------
 const fmtMoney = (n: number) => `$${(Math.round(n * 100) / 100).toLocaleString()}`;
 const extractDateFromFile = (name?: string) => {
@@ -64,6 +65,7 @@ function computeCoverageRatioFromDetails(opt: PolicySummary): number {
   }
   return typeof opt.coveredRatio === "number" ? opt.coveredRatio : 0;
 }
+
 
 const medLabel = (d: Detail) =>
   d.type === "percent" ? `${d.med} • ${d.percent}%` : d.type === "covered" ? `${d.med} • 100%` : `${d.med} • Not covered`;
@@ -152,7 +154,6 @@ export default function PatientBillingPage() {
 
   // Average coverage score from the current policy (0..1). Default to 1 if unknown.
   const avgCoverageScore = data?.current?.score ?? 1;
-  const totalOwed = totalBilled - totalBilled * avgCoverageScore;
 
   const adjustedCovered = useMemo(() => rawCovered * avgCoverageScore, [rawCovered, avgCoverageScore]);
   const adjustedCoveredPct = useMemo(
@@ -163,6 +164,17 @@ export default function PatientBillingPage() {
   // current out-of-pocket proxy (you can replace with your real value)
   const currentAnnualOOP = useMemo(() => bills.reduce((s, b) => s + b.patientAmount, 0), [bills]);
   void currentAnnualOOP; // silence unused for now
+  // Compute true coverage ratio from the current plan details
+const currentCoverageRatio = data?.current
+  ? computeCoverageRatioFromDetails(data.current)
+  : rawCovered / (totalBilled || 1); // fallback if no plan
+
+// Covered dollars
+const coveredDollars = totalBilled * currentCoverageRatio;
+
+// Amount owed
+const totalOwed = totalBilled - coveredDollars;
+
 
   return (
     <RoleBasedLayout>
@@ -191,12 +203,12 @@ export default function PatientBillingPage() {
               <Shield className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-600">{fmtMoney(adjustedCovered)}</div>
-              <p className="text-xs text-muted-foreground">
-                {adjustedCoveredPct}% of {fmtMoney(totalBilled)} covered
-                {avgCoverageScore !== 1 && " (plan score applied)"}
-              </p>
-            </CardContent>
+  <div className="text-2xl font-bold text-green-600">{fmtMoney(coveredDollars)}</div>
+  <p className="text-xs text-muted-foreground">
+    {Math.round(currentCoverageRatio * 100)}% of {fmtMoney(totalBilled)} covered
+  </p>
+</CardContent>
+
           </Card>
 
           <Card>
@@ -248,8 +260,9 @@ export default function PatientBillingPage() {
                           <Badge variant="secondary">Partial: {data.current.partial}</Badge>
                           <Badge variant="destructive">Not covered: {data.current.notCovered}</Badge>
                           <Badge variant="outline">
-                            Coverage: {Math.round((data.current.coveredRatio ?? 0) * 100)}%
+                            Coverage: {Math.round(computeCoverageRatioFromDetails(data.current) * 100)}%
                           </Badge>
+
                         </div>
                       </div>
                       {data.current.beFileName && (

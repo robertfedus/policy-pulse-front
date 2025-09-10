@@ -379,11 +379,6 @@ export default function HospitalPatientsPage() {
                         <span>Role: {p.role}</span>
                       </div>
 
-                      {/* Actions (placeholders) */}
-                      <div className="flex justify-end gap-2">
-                        <Button variant="outline" size="sm">View record</Button>
-                        <Button variant="outline" size="sm">Message</Button>
-                      </div>
                     </div>
                   )}
                 </CardContent>
