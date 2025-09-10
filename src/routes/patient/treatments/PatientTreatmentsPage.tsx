@@ -8,8 +8,7 @@ import { RoleBasedLayout } from "@/components/layout/role-based-layout"
 export default function PatientTreatmentsPage() {
   const { user } = useAuth()
 
-  // Patient illnesses from backend (schema key is "ilnesses")
-  const illnesses = user?.ilnesses ?? []
+  const illnesses = user?.illnesses ?? []
 
   // If you still want to keep mock treatments for now:
   // const [treatmentPlan] = useState<PatientTreatmentPlan>(mockPatientTreatmentPlan)

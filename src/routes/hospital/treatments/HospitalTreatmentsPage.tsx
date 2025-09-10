@@ -21,7 +21,7 @@ import { useAuth } from "@/contexts/auth-context"
 // ---------- Config ----------
 const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ?? ""
 
-// ---------- Backend types (based on your API) ----------
+// ---------- Backend types ----------
 type FirestoreTimestamp = { _seconds: number; _nanoseconds: number }
 
 type Illness = {
@@ -35,16 +35,15 @@ type Patient = {
   name: string
   role: "patient" | "hospital"
   insuredAt?: string[]         // ["policies/<id>", ...]
-  illnesses?: Illness[]        // correct spelling from API
-  // some backends you showed earlier used "ilnesses" (one L); handle both safely
-  ilnesses?: Illness[]
+  illnesses?: Illness[]        // correct spelling
+  ilnesses?: Illness[]         // legacy spelling
   createdAt?: FirestoreTimestamp
 }
 
 type PatientsResponse = { data: Patient[] }
 
-// Coverage entries returned by policies API
-type CoverageCovered = { type: "covered" }
+// Coverage entries commonly returned by policies API
+type CoverageCovered = { type: "covered"; copay?: number }
 type CoverageNotCovered = { type: "not_covered" }
 type CoveragePercent = { type: "percent"; percent: number; copay?: number }
 type CoverageEntry = CoverageCovered | CoverageNotCovered | CoveragePercent
@@ -52,38 +51,130 @@ type CoverageEntry = CoverageCovered | CoverageNotCovered | CoveragePercent
 type Policy = {
   id: string
   name: string
-  coverage_map?: Record<string, CoverageEntry> // keys by medication name (or code)
+  // backend may send: Record<string, CoverageEntry | number | string>, or array of single-key objects
+  coverage_map?: any
 }
 
 type PolicyResponse = { data: Policy } | { data: Policy[] }
 
 // ---------- Helpers ----------
 const extractPolicyId = (ref: string) => ref.split("/")[1] ?? ref
-
-// be resilient to both "illnesses" and older "ilnesses"
 const getIllnesses = (p: Patient): Illness[] => p.illnesses ?? p.ilnesses ?? []
 
-const rankCoverage = (entry?: CoverageEntry): number => {
-  // Higher is better: full > partial > none/unknown
-  if (!entry) return 0
-  if (entry.type === "covered") return 3
-  if (entry.type === "percent") {
-    if (entry.percent >= 100) return 3
-    if (entry.percent > 0) return 2
-    return 0
+// Accept numbers/strings/objects for flexible coverage input
+const parsePercentString = (s: string): number | null => {
+  const m = s.trim().match(/^(\d+(?:\.\d+)?)\s*%?$/)
+  return m ? Math.max(0, Math.min(100, Number(m[1]))) : null
+}
+const normalizeCoverageMapLoose = (raw: any): Record<string, any> => {
+  if (!raw) return {}
+  if (Array.isArray(raw)) {
+    const out: Record<string, any> = {}
+    for (const item of raw) {
+      if (item && typeof item === "object") {
+        const k = Object.keys(item)[0]
+        if (k) out[k] = item[k]
+      }
+    }
+    return out
   }
-  return 0
+  if (typeof raw === "object") return raw as Record<string, any>
+  return {}
 }
 
-const labelCoverage = (entry?: CoverageEntry): { text: string; variant: "default" | "secondary" | "destructive" } => {
+// Convert raw value to a typed CoverageEntry we can reason about consistently
+const interpretCoverage = (val: any): CoverageEntry | undefined => {
+  if (val == null) return undefined
+
+  // Already structured
+  if (typeof val === "object" && "type" in val) {
+    const t = String(val.type)
+    if (t === "covered") return { type: "covered", copay: (val as any).copay }
+    if (t === "not_covered") return { type: "not_covered" }
+    if (t === "percent") {
+      const percent = Number((val as any).percent) || 0
+      const copay = (val as any).copay
+      return { type: "percent", percent: Math.max(0, Math.min(100, percent)), copay }
+    }
+  }
+
+  // Number form
+  if (typeof val === "number") {
+    const n = Math.max(0, Math.min(100, val))
+    if (n <= 0) return { type: "not_covered" }
+    if (n >= 100) return { type: "percent", percent: 100 }
+    return { type: "percent", percent: n }
+  }
+
+  // String form
+  if (typeof val === "string") {
+    const s = val.trim().toLowerCase()
+    if (s === "covered" || s === "full") return { type: "covered" }
+    if (s === "not covered" || s === "not_covered" || s === "none") return { type: "not_covered" }
+    const pct = parsePercentString(s)
+    if (pct != null) {
+      if (pct <= 0) return { type: "not_covered" }
+      return { type: "percent", percent: pct }
+    }
+  }
+
+  return undefined
+}
+
+// Full / None / Partial buckets per your rule
+const isFull = (entry?: CoverageEntry): boolean => {
+  if (!entry) return false
+  if (entry.type === "covered") return true
+  if (entry.type === "percent" && entry.percent >= 100) return true
+  return false
+}
+const isNone = (entry?: CoverageEntry): boolean => {
+  if (!entry) return true // treat missing as none for counting
+  if (entry.type === "not_covered") return true
+  if (entry.type === "percent" && entry.percent <= 0) return true
+  return false
+}
+
+const labelCoverage = (
+  entry?: CoverageEntry
+): { text: string; variant: "default" | "secondary" | "destructive" } => {
   if (!entry) return { text: "Not covered", variant: "secondary" }
-  if (entry.type === "covered") return { text: "Covered", variant: "default" }
-  if (entry.type === "percent") {
-    const base = `${entry.percent}%`
+  if (entry.type === "covered") {
     const copay = entry.copay != null ? ` (copay $${entry.copay})` : ""
-    return { text: `${base}${copay}`, variant: "default" }
+    return { text: `Covered${copay}`, variant: "default" }
+  }
+  if (entry.type === "percent") {
+    const copay = entry.copay != null ? ` (copay $${entry.copay})` : ""
+    return { text: `${entry.percent}%${copay}`, variant: "default" }
   }
   return { text: "Not covered", variant: "secondary" }
+}
+
+// --------- CASE-INSENSITIVE LOOKUP (key change lives here) ---------
+const findKeyCaseInsensitive = (obj: Record<string, any>, wanted: string): string | null => {
+  if (!wanted) return null
+  if (Object.prototype.hasOwnProperty.call(obj, wanted)) return wanted
+  const wantedLc = wanted.toLowerCase()
+  for (const k of Object.keys(obj)) {
+    if (k.toLowerCase() === wantedLc) return k
+  }
+  return null
+}
+
+// Get one medication entry from a policy, interpreting flexible shapes (case-insensitive)
+const getPolicyMedCoverage = (pol: Policy | undefined, med: string): CoverageEntry | undefined => {
+  if (!pol || !med) return undefined
+  const map = normalizeCoverageMapLoose(pol.coverage_map)
+  const matchedKey = findKeyCaseInsensitive(map, med)
+  if (matchedKey == null) return undefined
+  return interpretCoverage(map[matchedKey])
+}
+
+// Score used only for sorting patients within an illness (full > partial > none)
+const rankCoverage = (entry?: CoverageEntry): number => {
+  if (isFull(entry)) return 3
+  if (isNone(entry)) return 0
+  return 2 // partial
 }
 
 const bestPolicyForIllness = (
@@ -91,16 +182,14 @@ const bestPolicyForIllness = (
   meds: string[],
   policyById: Record<string, Policy>
 ): { policyId?: string; policyName?: string; score: number; details: Record<string, CoverageEntry | undefined> } => {
-  let best: { policyId?: string; policyName?: string; score: number; details: Record<string, CoverageEntry | undefined> } =
-    { score: -1, details: {} }
-
+  let best = { score: -1, details: {} as Record<string, CoverageEntry | undefined> }
   for (const pid of patientPolicyIds) {
     const pol = policyById[pid]
     if (!pol) continue
     const details: Record<string, CoverageEntry | undefined> = {}
     let score = 0
     for (const m of meds) {
-      const entry = pol.coverage_map?.[m]
+      const entry = getPolicyMedCoverage(pol, m)
       details[m] = entry
       score += rankCoverage(entry)
     }
@@ -118,15 +207,12 @@ const fmtHospitalCoverageSummary = (
 ): Record<string, { full: number; partial: number; none: number }> => {
   const out: Record<string, { full: number; partial: number; none: number }> = {}
   for (const m of meds) {
-    let full = 0
-    let partial = 0
-    let none = 0
+    let full = 0, partial = 0, none = 0
     for (const pid of allPolicyIds) {
       const pol = policyById[pid]
-      if (!pol) continue
-      const entry = pol.coverage_map?.[m]
-      if (!entry || entry.type === "not_covered") none++
-      else if (entry.type === "covered" || (entry.type === "percent" && entry.percent >= 100)) full++
+      const entry = getPolicyMedCoverage(pol, m)
+      if (isFull(entry)) full++
+      else if (isNone(entry)) none++
       else partial++
     }
     out[m] = { full, partial, none }
@@ -145,7 +231,6 @@ export default function TreatmentsPage() {
   const [error, setError] = useState<string | null>(null)
   const [q, setQ] = useState("")
 
-  // Track which policy IDs we've already attempted to fetch to prevent loops
   const fetchedPolicyIdsRef = useRef<Set<string>>(new Set())
 
   // Fetch patients for this hospital
@@ -193,7 +278,6 @@ export default function TreatmentsPage() {
 
   // Collect unique policy ids from all patients, fetch each once (deduped)
   useEffect(() => {
-    // Build the set of policy IDs we need for the current patients
     const ids = new Set<string>()
     for (const p of patients) (p.insuredAt ?? []).forEach((ref) => ids.add(extractPolicyId(ref)))
 
@@ -202,7 +286,6 @@ export default function TreatmentsPage() {
     )
     if (toFetch.length === 0) return
 
-    // mark as in-flight to avoid loops even if the request fails/304s
     toFetch.forEach((id) => fetchedPolicyIdsRef.current.add(id))
 
     let cancelled = false
@@ -216,26 +299,20 @@ export default function TreatmentsPage() {
               signal: ctrl.signal,
               headers: { Accept: "application/json" },
               credentials: "include",
-              cache: "no-store", // avoid conditional 304 loops
+              cache: "no-store",
             })
-            // Treat 304 as a soft miss (no change) — just don't update state
             if (res.status === 304) return null
-            if (!res.ok) {
-              // keep it marked as fetched to prevent hammering the server
-              throw new Error(`HTTP ${res.status}`)
-            }
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
             const payload: PolicyResponse = await res.json()
             const pol = Array.isArray((payload as any).data)
               ? (payload as any).data[0]
               : (payload as any).data
-            // basic shape guard
             if (!pol || !pol.id) return null
             return pol as Policy
           })
         )
 
         if (cancelled) return
-        // Merge successfully fetched policies
         setPolicyById((prev) => {
           const next = { ...prev }
           for (const r of results) {
@@ -246,7 +323,7 @@ export default function TreatmentsPage() {
           return next
         })
       } catch {
-        // swallow — fetchedPolicyIdsRef prevents tight retry loops
+        // no-op (dedupe set prevents tight loops)
       }
     })()
 
@@ -254,7 +331,6 @@ export default function TreatmentsPage() {
       cancelled = true
       ctrl.abort()
     }
-    // Important: depend only on patients (not policyById) to avoid self-trigger loops.
   }, [patients, policyById])
 
   // Build Illness -> { medications, patients[], hospitalCoverageSummary }
@@ -274,7 +350,6 @@ export default function TreatmentsPage() {
   }
 
   const illnessCards: IllnessCard[] = useMemo(() => {
-    // Search filter (name/email/illness/med)
     const term = q.trim().toLowerCase()
     const filteredPatients = term
       ? patients.filter((p) => {
@@ -290,7 +365,6 @@ export default function TreatmentsPage() {
         })
       : patients
 
-    // Group by illness
     const map = new Map<
       string,
       { meds: Set<string>; members: Patient[]; allPolicyIds: Set<string> }
@@ -311,14 +385,12 @@ export default function TreatmentsPage() {
 
     const res: IllnessCard[] = []
     for (const [illness, { meds, members, allPolicyIds }] of map) {
-      // Coverage summary across all policies referenced for this illness
       const coverageSummary = fmtHospitalCoverageSummary(
         Array.from(meds),
         Array.from(allPolicyIds),
         policyById
       )
 
-      // Build patient rows with best policy for the illness
       const rows = members.map((p) => {
         const patientPolicyIds = (p.insuredAt ?? []).map(extractPolicyId)
         const { policyId, policyName, score, details } = bestPolicyForIllness(
@@ -337,7 +409,6 @@ export default function TreatmentsPage() {
         }
       })
 
-      // Sort patients: best coverage first, then by name
       rows.sort((a, b) => (b.bestScore - a.bestScore) || a.name.localeCompare(b.name))
 
       res.push({
@@ -348,7 +419,6 @@ export default function TreatmentsPage() {
       })
     }
 
-    // Sort illnesses by number of affected patients desc
     res.sort((a, b) => b.patients.length - a.patients.length)
     return res
   }, [patients, policyById, q])
@@ -512,7 +582,6 @@ export default function TreatmentsPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => {
-                      // open every distinct policy’s PDF referenced in this illness
                       const ids = new Set<string>()
                       card.patients.forEach((p) => {
                         if (p.bestPolicyId) ids.add(p.bestPolicyId)

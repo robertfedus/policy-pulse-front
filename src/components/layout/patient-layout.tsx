@@ -9,11 +9,9 @@ import { NotificationCenter } from "@/components/notifications/notification-cent
 const navigationItems = [
   { icon: Home, label: "Dashboard", href: "/patient", end: true },
   { icon: FileText, label: "Treatment Plans", href: "/patient/treatments" },
-  // ⬇️ Renamed and moved to a clearer path
   { icon: CreditCard, label: "Policy Coverage", href: "/patient/coverage" },
   { icon: Shield, label: "Insurance Policies", href: "/patient/policies" },
   { icon: Building2, label: "Insurance Companies", href: "/patient/insurers" },
-  // ⛔ Removed: { Calendar, "Visits & Incidents", "/patient/visits" }
 ]
 
 // Helper: title matching current path

@@ -11,7 +11,7 @@ const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ?? ""
 
 // ----------------- Types -----------------
 type CoverageEntry =
-  | { type: "covered" }
+  | { type: "covered"; copay?: number }            // allow copay on covered (API sometimes sends it)
   | { type: "percent"; percent: number; copay?: number }
   | { type: "not_covered" }
 
@@ -22,7 +22,10 @@ export interface BackendPolicy {
   beFileName?: string
   effectiveDate: string | null
   version: number | string // backend can send string; we normalize to number at runtime
-  coverage_map: Record<string, CoverageEntry>
+
+  // NOTE: backend may return an array of {key: number} OR an object of {key: CoverageEntry | number}
+  coverage_map: any
+
   createdAt?: { _seconds: number; _nanoseconds: number }
   updatedAt?: { _seconds: number; _nanoseconds: number }
   insuranceCompanyRef?: string
@@ -46,8 +49,12 @@ const fmtDate = (iso: string | null | undefined) => {
 
 const humanCoverage = (k: string, v: CoverageEntry) => {
   switch (v.type) {
-    case "covered": return `${k}: covered`
-    case "not_covered": return `${k}: not covered`
+    case "covered": {
+      const copay = v.copay != null ? ` (copay $${v.copay})` : ""
+      return `${k}: covered${copay}`
+    }
+    case "not_covered":
+      return `${k}: not covered`
     case "percent": {
       const copay = v.copay != null ? ` (copay $${v.copay})` : ""
       return `${k}: ${v.percent}%${copay}`
@@ -59,18 +66,65 @@ const humanCoverage = (k: string, v: CoverageEntry) => {
 const toSummaryText = (summary: BackendPolicy["summary"]): string | null => {
   if (typeof summary === "string") return summary
   if (summary && typeof summary === "object") {
-    if ("reason" in summary && summary.reason) return String(summary.reason)
+    if ("reason" in summary && (summary as any).reason) return String((summary as any).reason)
     try { return JSON.stringify(summary) } catch { return null }
   }
   return null
 }
 
-// Ensure version is a number and coverage_map exists
+// Convert any incoming coverage_map shape to a clean object of CoverageEntry
+function normalizeCoverageMap(raw: any): Record<string, CoverageEntry> {
+  const out: Record<string, CoverageEntry> = {}
+
+  if (!raw) return out
+
+  // Case A: array of single-key objects with numbers (e.g., [{ "paracetamol": 100 }, { "metformin": 40 }, ...])
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (!item || typeof item !== "object") continue
+      const key = Object.keys(item)[0]
+      const val = (key ? item[key] : undefined) as unknown
+      if (!key) continue
+      if (typeof val === "number") {
+        // Interpret number: 0 => not covered, 100 => 100%, 1..99 => percent
+        if (val <= 0) out[key] = { type: "not_covered" }
+        else out[key] = { type: "percent", percent: Math.max(0, Math.min(100, val)) }
+      } else if (val && typeof val === "object" && "type" in (val as any)) {
+        // Already in structured form
+        out[key] = val as CoverageEntry
+      }
+    }
+    return out
+  }
+
+  // Case B: object: keys -> either number or CoverageEntry-like objects
+  if (raw && typeof raw === "object") {
+    for (const [key, val] of Object.entries(raw)) {
+      if (typeof val === "number") {
+        if (val <= 0) out[key] = { type: "not_covered" }
+        else out[key] = { type: "percent", percent: Math.max(0, Math.min(100, val)) }
+      } else if (val && typeof val === "object") {
+        const v = val as any
+        // accept {type:"covered", copay?}, {type:"percent", percent, copay?}, {type:"not_covered"}
+        if (typeof v.type === "string") {
+          if (v.type === "covered") out[key] = { type: "covered", copay: v.copay }
+          else if (v.type === "not_covered") out[key] = { type: "not_covered" }
+          else if (v.type === "percent") out[key] = { type: "percent", percent: Number(v.percent) || 0, copay: v.copay }
+        }
+      }
+    }
+    return out
+  }
+
+  return out
+}
+
+// Ensure version is a number and coverage_map exists / normalized
 const normalizePolicy = <T extends BackendPolicy>(p: T): T & { version: number; coverage_map: Record<string, CoverageEntry> } => {
   return {
     ...p,
     version: Number((p as any).version) || 0,
-    coverage_map: (p.coverage_map ?? {}) as Record<string, CoverageEntry>,
+    coverage_map: normalizeCoverageMap((p as any).coverage_map),
   }
 }
 
@@ -114,7 +168,6 @@ async function resolvePdfUrl(policyId: string): Promise<string> {
 
 // Fallback-aware fetch: try company endpoint first, then fall back to global list
 async function fetchCompanyPoliciesWithFallback(companyId: string): Promise<(ReturnType<typeof normalizePolicy>)[]> {
-  // 1) try /policies/insurance-company/:companyId
   try {
     const res = await fetch(`${API_BASE}/api/v1/policies/insurance-company/${companyId}`, {
       headers: { Accept: "application/json" },
@@ -125,11 +178,7 @@ async function fetchCompanyPoliciesWithFallback(companyId: string): Promise<(Ret
       const arr = Array.isArray(payload?.data) ? payload.data : []
       return arr.map(normalizePolicy)
     }
-  } catch {
-    // ignore and fall back
-  }
-
-  // 2) fallback: fetch all and filter locally
+  } catch {}
   const allRes = await fetch(`${API_BASE}/api/v1/policies`, {
     headers: { Accept: "application/json" },
     credentials: "include",

@@ -21,12 +21,10 @@ type Policy = {
   summary?: string
   beFileName?: string
   effectiveDate: string | null
-  version: number
+  version: number | string // backend may return string; we coerce
   coverage_map: Record<string, CoverageEntry>
   insuranceCompanyRef?: string // "insurance_companies/{id}"
 }
-
-type InsuranceCompany = { id: string; name: string }
 
 export default function PolicyNewVersionPage() {
   const { policyId } = useParams()
@@ -41,12 +39,6 @@ export default function PolicyNewVersionPage() {
   const [file, setFile] = useState<File | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  // Companies dropdown
-  const [companies, setCompanies] = useState<InsuranceCompany[]>([])
-  const [companiesLoading, setCompaniesLoading] = useState(true)
-  const [companiesError, setCompaniesError] = useState<string | null>(null)
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("")
-
   // Load current policy
   useEffect(() => {
     if (!policyId) return
@@ -60,14 +52,11 @@ export default function PolicyNewVersionPage() {
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const payload = await res.json()
-        const p: Policy | null = payload?.data ?? null
+        const p: Policy | null =
+          (Array.isArray(payload?.data) ? payload.data[0] : payload?.data) ?? null
         if (!cancelled) {
           setPolicy(p)
           setEffectiveDate(p?.effectiveDate ?? "")
-          // pre-select company from policy.insuranceCompanyRef
-          const ref = p?.insuranceCompanyRef ?? ""
-          const idFromRef = ref.startsWith("insurance_companies/") ? ref.split("/")[1] : ""
-          setSelectedCompanyId(idFromRef)
         }
       } catch (e: any) {
         if (!cancelled) setError(e?.message ?? "Failed to load policy")
@@ -78,35 +67,12 @@ export default function PolicyNewVersionPage() {
     return () => { cancelled = true }
   }, [policyId])
 
-  // Load companies for dropdown
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      setCompaniesLoading(true); setCompaniesError(null)
-      try {
-        // Uses underscore variant, per your backend sample
-        const res = await fetch(`${API_BASE}/api/v1/insurance_companies`, {
-          headers: { Accept: "application/json" },
-          credentials: "include",
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const payload = await res.json()
-        const list: InsuranceCompany[] = Array.isArray(payload?.data) ? payload.data : []
-        if (!cancelled) {
-          setCompanies(list)
-          if (!selectedCompanyId && list[0]) setSelectedCompanyId(list[0].id)
-        }
-      } catch (e: any) {
-        if (!cancelled) setCompaniesError(e?.message ?? "Failed to load companies")
-      } finally {
-        if (!cancelled) setCompaniesLoading(false)
-      }
-    })()
-    return () => { cancelled = true }
-  }, []) // once
+  function nextVersion(v: number | string | undefined | null) {
+    return (Number(v) || 0) + 1
+  }
 
-  function stripCoverageMap(m: Record<string, CoverageEntry>) {
-    // ensure entries match zod schema shape (no copay)
+  function normalizeCoverageMap(m: Record<string, CoverageEntry>) {
+    // ensure entries match server schema (no copay)
     const out: Record<string, CoverageEntry> = {}
     for (const [k, v] of Object.entries(m ?? {})) {
       if (v.type === "percent") out[k] = { type: "percent", percent: Number((v as any).percent ?? 0) }
@@ -124,17 +90,22 @@ export default function PolicyNewVersionPage() {
 
       setSubmitting(true)
 
-      // Build form to match PoliciesCreateSchema (+ file)
-      // Summary is NOT included; backend will auto-generate it from the PDF.
+      const newVersion = nextVersion(policy.version)
+
+      // Build form to CREATE a new record (new id) as the next version.
+      // Do NOT send `id`. Keep same name + insuranceCompanyRef, bump version.
       const form = new FormData()
       form.append("name", policy.name)
-      form.append("insuranceCompanyRef", `insurance_companies/${selectedCompanyId}`)
-      form.append("beFileName", file.name)
-      if (effectiveDate) form.append("effectiveDate", effectiveDate) // ISO (yyyy-mm-dd)
-      form.append("version", String(policy.version + 1)) // increment
-      form.append("coverage_map", JSON.stringify(stripCoverageMap(policy.coverage_map ?? {})))
-      form.append("file", file)
+      if (policy.insuranceCompanyRef) {
+        form.append("insuranceCompanyRef", policy.insuranceCompanyRef)
+      }
+      if (effectiveDate) form.append("effectiveDate", effectiveDate) // ISO yyyy-mm-dd (optional)
+      form.append("version", String(newVersion))                     // numeric increment -> "2"
+      form.append("coverage_map", JSON.stringify(normalizeCoverageMap(policy.coverage_map ?? {})))
+      form.append("beFileName", file.name)                           // filename for storage
+      form.append("file", file)                                      // the new PDF
 
+      // Same upload route — backend creates a NEW policy row (new id) for this version
       const res = await fetch(`${API_BASE}/api/v1/policies/upload`, {
         method: "POST",
         body: form,
@@ -142,13 +113,11 @@ export default function PolicyNewVersionPage() {
       })
       if (!res.ok) {
         const body = await res.text().catch(() => "")
-        throw new Error(`Failed to create new version (HTTP ${res.status}) ${body}`)
+        throw new Error(`Failed to upload new version (HTTP ${res.status}) ${body}`)
       }
 
-      // Optional: you mentioned /api/v1/policies/summary/:id for manual summary.
-      // Assuming backend auto-summarizes on upload, we don’t call it here.
-
-      navigate("/hospital/policies")
+      // Navigate back to Policies list (replace to avoid resubmits)
+      navigate("/hospital/policies", { replace: true })
     } catch (err: any) {
       alert(err?.message ?? "Failed to submit new version")
     } finally {
@@ -161,19 +130,21 @@ export default function PolicyNewVersionPage() {
     try { return new Date(iso).toLocaleDateString() } catch { return iso ?? "—" }
   }
 
-  const canSubmit = !!file && !submitting && !!selectedCompanyId
+  const canSubmit = !!file && !submitting
+  const currentVersion = Number(policy?.version) || 0
+  const newVersionPreview = currentVersion + 1
 
   return (
     <RoleBasedLayout>
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold text-foreground">Update Policy (New Version)</h1>
+          <h1 className="text-3xl font-bold text-foreground">Create New Version</h1>
           <div className="flex gap-2">
             <Button type="button" variant="outline" onClick={() => navigate(-1)} disabled={submitting}>
               Cancel
             </Button>
             <Button type="submit" disabled={!canSubmit}>
-              {submitting ? "Saving…" : "Create New Version"}
+              {submitting ? "Saving…" : `Save v${newVersionPreview}`}
             </Button>
           </div>
         </div>
@@ -181,7 +152,10 @@ export default function PolicyNewVersionPage() {
         <Card>
           <CardHeader>
             <CardTitle>Current Policy</CardTitle>
-            <CardDescription>The new file will be saved as the next version of this policy.</CardDescription>
+            <CardDescription>
+              Upload a new PDF. This will create a <b>new policy record (new id)</b> as <b>v{newVersionPreview}</b>,
+              linked by the same <code>name</code> and <code>insuranceCompanyRef</code>.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
             {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -196,7 +170,7 @@ export default function PolicyNewVersionPage() {
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs uppercase text-muted-foreground">Current Version</Label>
-                    <div className="text-sm font-medium">v{policy.version}</div>
+                    <div className="text-sm font-medium">v{currentVersion}</div>
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs uppercase text-muted-foreground">Current Effective Date</Label>
@@ -211,14 +185,14 @@ export default function PolicyNewVersionPage() {
                   </div>
                 )}
 
-
                 {/* Info */}
                 <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/40 rounded-md p-3">
                   <Info className="h-4 w-4 mt-0.5" />
                   <div>
                     <div className="font-medium">What’s required?</div>
                     Upload a new PDF (required). Effective date is optional.
-                    The backend will auto-generate the summary and the version will be saved as <span className="font-semibold">v{(policy.version ?? 0) + 1}</span>.
+                    The backend will auto-generate the summary. We <b>do not</b> send <code>id</code>,
+                    so a new record (new id) is created as version <span className="font-semibold">v{newVersionPreview}</span>.
                   </div>
                 </div>
 
@@ -253,7 +227,7 @@ export default function PolicyNewVersionPage() {
             Cancel
           </Button>
           <Button type="submit" disabled={!canSubmit}>
-            {submitting ? "Saving…" : "Create New Version"}
+            {submitting ? "Saving…" : `Save v${newVersionPreview}`}
           </Button>
         </div>
       </form>

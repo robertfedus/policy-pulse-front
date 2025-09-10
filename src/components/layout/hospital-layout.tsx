@@ -1,11 +1,8 @@
 import React, { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/contexts/auth-context"
-import { Users, FileText, Shield, Bell, LogOut, Menu, Home, Mail, Clock } from "lucide-react"
+import { Users, FileText, Shield, LogOut, Menu, Home, Clock } from "lucide-react"
 import { NavLink, useLocation } from "react-router-dom"
-import { NotificationCenter } from "@/components/notifications/notification-center"
-import { PolicyChangeWizard } from "@/components/notifications/policy-change-wizard"
 
 const navigationItems = [
   { icon: Home, label: "Dashboard", href: "/hospital", end: true },
@@ -25,12 +22,8 @@ const titleForPath = (path: string) => {
 
 export function HospitalLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false)
-  const [policyWizardOpen, setPolicyWizardOpen] = useState(false)
   const { user, logout } = useAuth()
   const pathname = useLocation().pathname
-
-  const unreadNotifications = 2
 
   return (
     <div className="min-h-screen bg-background">
@@ -55,7 +48,7 @@ export function HospitalLayout({ children }: { children: React.ReactNode }) {
       >
         <div className="flex flex-col h-full overflow-hidden">
           <div className="p-6 border-b border-sidebar-border">
-            <h1 className="text-xl font-bold text-primary">Healthcare Portal</h1>
+            <h1 className="text-xl font-bold text-primary">Policy Pulse</h1>
             <p className="text-sm text-muted-foreground mt-1">
               Hospital Dashboard
             </p>
@@ -86,17 +79,6 @@ export function HospitalLayout({ children }: { children: React.ReactNode }) {
                 )}
               </NavLink>
             ))}
-
-            <div className="pt-4 border-t border-sidebar-border">
-              <Button
-                variant="outline"
-                className="w-full justify-start text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground bg-transparent"
-                onClick={() => setPolicyWizardOpen(true)}
-              >
-                <Mail className="mr-3 h-4 w-4" aria-hidden="true" />
-                Notify Policy Changes
-              </Button>
-            </div>
           </nav>
 
           {/* Sticky user panel */}
@@ -132,26 +114,8 @@ export function HospitalLayout({ children }: { children: React.ReactNode }) {
             <h2 className="text-lg font-semibold text-card-foreground">
               {titleForPath(pathname)}
             </h2>
-            <div className="flex items-center space-x-4">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="relative"
-                onClick={() => setNotificationCenterOpen(true)}
-                aria-label="Open notifications"
-              >
-                <Bell className="h-4 w-4" aria-hidden="true" />
-                {unreadNotifications > 0 && (
-                  <Badge
-                    variant="destructive"
-                    className="absolute -top-1 -right-1 h-5 w-5 text-xs flex items-center justify-center p-0"
-                    aria-label={`${unreadNotifications} unread notifications`}
-                  >
-                    {unreadNotifications}
-                  </Badge>
-                )}
-              </Button>
-            </div>
+            {/* Right-side header actions intentionally left empty (notifications removed) */}
+            <div />
           </div>
         </header>
 
@@ -166,15 +130,6 @@ export function HospitalLayout({ children }: { children: React.ReactNode }) {
           aria-hidden="true"
         />
       )}
-
-      <NotificationCenter
-        isOpen={notificationCenterOpen}
-        onClose={() => setNotificationCenterOpen(false)}
-      />
-      <PolicyChangeWizard
-        isOpen={policyWizardOpen}
-        onClose={() => setPolicyWizardOpen(false)}
-      />
     </div>
   )
 }

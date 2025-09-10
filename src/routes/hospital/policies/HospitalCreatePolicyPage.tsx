@@ -6,14 +6,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
-import { Plus, Trash2, Info } from "lucide-react"
+import { Info, Loader2 } from "lucide-react"
 
 const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ?? ""
 
+// Payload types sent to the backend
 type CoverageEntry =
   | { type: "covered" }
-  | { type: "percent"; percent: number } // no copay in payload per server schema
+  | { type: "percent"; percent: number } // (no copay in payload per server schema)
   | { type: "not_covered" }
 
 type InsuranceCompany = { id: string; name: string }
@@ -21,7 +21,7 @@ type InsuranceCompany = { id: string; name: string }
 export default function PolicyCreatePage() {
   const navigate = useNavigate()
 
-  // Insurer
+  // ---- Insurance company state ----
   const [companies, setCompanies] = useState<InsuranceCompany[]>([])
   const [loadingCompanies, setLoadingCompanies] = useState(true)
   const [companyError, setCompanyError] = useState<string | null>(null)
@@ -29,27 +29,24 @@ export default function PolicyCreatePage() {
   const [existingCompanyId, setExistingCompanyId] = useState<string>("")
   const [newCompanyName, setNewCompanyName] = useState<string>("")
 
-  // Policy fields (no summary)
+  // ---- Form state ----
   const [name, setName] = useState("")
-  const [effectiveDate, setEffectiveDate] = useState<string>("") // yyyy-mm-dd
+  const [effectiveDate, setEffectiveDate] = useState<string>("") // yyyy-mm-dd (optional)
   const [file, setFile] = useState<File | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
-  // coverage_map editor (simple list)
-  type Row = {
-    key: string
-    type: "covered" | "percent" | "not_covered"
-    percent?: number
-    copay?: number // UI-only; stripped before submit
-  }
+  // (Optional) coverage_map editor scaffolding;
+  // If you add UI later, buildCoverageMap() already ignores empty keys.
+  type Row = { key: string; type: "covered" | "percent" | "not_covered"; percent?: number }
   const [rows, setRows] = useState<Row[]>([])
 
+  // Load insurers
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       setLoadingCompanies(true)
       setCompanyError(null)
       try {
-        // underscore path
         const res = await fetch(`${API_BASE}/api/v1/insurance_companies`, {
           headers: { Accept: "application/json" },
           credentials: "include",
@@ -70,11 +67,7 @@ export default function PolicyCreatePage() {
     return () => { cancelled = true }
   }, [])
 
-  const addRow = () => setRows((r) => [...r, { key: "", type: "covered" }])
-  const removeRow = (i: number) => setRows((r) => r.filter((_, idx) => idx !== i))
-  const updateRow = (i: number, patch: Partial<Row>) =>
-    setRows((r) => r.map((row, idx) => (idx === i ? { ...row, ...patch } : row)))
-
+  // Ensure company (either pick existing or create new)
   async function ensureCompanyId(): Promise<string> {
     if (companyChoice === "existing") {
       if (!existingCompanyId) throw new Error("Please select a company")
@@ -97,8 +90,8 @@ export default function PolicyCreatePage() {
     return createdId
   }
 
+  // Only include non-empty coverage items; ensures backend doesn’t see empty arrays/keys.
   function buildCoverageMap(): Record<string, CoverageEntry> {
-    // match server schema (no copay)
     const m: Record<string, CoverageEntry> = {}
     for (const r of rows) {
       const k = r.key.trim()
@@ -116,9 +109,12 @@ export default function PolicyCreatePage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (submitting) return
     try {
       if (!name.trim()) throw new Error("Name is required")
       if (!file) throw new Error("Please attach a PDF")
+
+      setSubmitting(true)
 
       const companyId = await ensureCompanyId()
 
@@ -126,7 +122,7 @@ export default function PolicyCreatePage() {
       const form = new FormData()
       form.append("name", name.trim())
       form.append("insuranceCompanyRef", `insurance_companies/${companyId}`)
-      if (effectiveDate) form.append("effectiveDate", effectiveDate) // ISO yyyy-mm-dd
+      if (effectiveDate) form.append("effectiveDate", effectiveDate) // optional ISO yyyy-mm-dd
       form.append("version", "1")
       form.append("coverage_map", JSON.stringify(buildCoverageMap()))
       form.append("beFileName", file.name) // required by schema
@@ -142,33 +138,38 @@ export default function PolicyCreatePage() {
         throw new Error(`Failed to create policy (HTTP ${res.status}) ${body}`)
       }
 
-      navigate("/hospital/policies")
+      // Navigate back to policies (replace history so back won’t return to form)
+      navigate("/hospital/policies", { replace: true })
     } catch (err: any) {
       alert(err?.message ?? "Failed to submit")
+    } finally {
+      setSubmitting(false)
     }
   }
 
   const canSubmit =
     !!name.trim() &&
     !!file &&
-    (companyChoice === "new" ? !!newCompanyName.trim() : !!existingCompanyId)
+    (companyChoice === "new" ? !!newCompanyName.trim() : !!existingCompanyId) &&
+    !submitting
 
   return (
     <RoleBasedLayout>
       <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold text-foreground">New Policy</h1>
           <div className="flex gap-2">
-            <Button type="button" variant="outline" onClick={() => navigate(-1)}>
+            <Button type="button" variant="outline" onClick={() => navigate(-1)} disabled={submitting}>
               Cancel
             </Button>
             <Button type="submit" disabled={!canSubmit}>
-              Create Policy
+              {submitting ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Creating…</>) : "Create Policy"}
             </Button>
           </div>
         </div>
 
-        {/* Insurer */}
+        {/* Insurance company */}
         <Card>
           <CardHeader>
             <CardTitle>Insurance Company</CardTitle>
@@ -183,6 +184,7 @@ export default function PolicyCreatePage() {
                   value="existing"
                   checked={companyChoice === "existing"}
                   onChange={() => setCompanyChoice("existing")}
+                  disabled={submitting}
                 />
                 <span>Use existing</span>
               </label>
@@ -193,6 +195,7 @@ export default function PolicyCreatePage() {
                   value="new"
                   checked={companyChoice === "new"}
                   onChange={() => setCompanyChoice("new")}
+                  disabled={submitting}
                 />
                 <span>Create new</span>
               </label>
@@ -203,7 +206,7 @@ export default function PolicyCreatePage() {
                 <Label>Company</Label>
                 <select
                   className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  disabled={loadingCompanies || !!companyError}
+                  disabled={loadingCompanies || !!companyError || submitting}
                   value={existingCompanyId}
                   onChange={(e) => setExistingCompanyId(e.target.value)}
                 >
@@ -223,13 +226,14 @@ export default function PolicyCreatePage() {
                   onChange={(e) => setNewCompanyName(e.target.value)}
                   placeholder="e.g., Evergreen Mutual"
                   required
+                  disabled={submitting}
                 />
               </div>
             )}
           </CardContent>
         </Card>
 
-        {/* Policy core (no summary) */}
+        {/* Policy details */}
         <Card>
           <CardHeader>
             <CardTitle>Policy Details</CardTitle>
@@ -239,7 +243,16 @@ export default function PolicyCreatePage() {
             <div className="grid md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Name</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} required />
+                <Input value={name} onChange={(e) => setName(e.target.value)} required disabled={submitting} />
+              </div>
+              <div className="space-y-2">
+                <Label>Effective Date (optional)</Label>
+                <Input
+                  type="date"
+                  value={effectiveDate}
+                  onChange={(e) => setEffectiveDate(e.target.value)}
+                  disabled={submitting}
+                />
               </div>
             </div>
 
@@ -258,17 +271,21 @@ export default function PolicyCreatePage() {
                 accept="application/pdf"
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                 required
+                disabled={submitting}
               />
             </div>
+
+            {/* (Optional) If you later add a UI for coverage rows, keep using buildCoverageMap() */}
           </CardContent>
         </Card>
 
+        {/* Footer buttons */}
         <div className="flex justify-end gap-2">
-          <Button type="button" variant="outline" onClick={() => navigate(-1)}>
+          <Button type="button" variant="outline" onClick={() => navigate(-1)} disabled={submitting}>
             Cancel
           </Button>
           <Button type="submit" disabled={!canSubmit}>
-            Create Policy
+            {submitting ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Creating…</>) : "Create Policy"}
           </Button>
         </div>
       </form>
